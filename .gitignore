@@ -51,7 +51,8 @@ coverage.xml
 *.pot
 
 # Environments
-.env
+.env*
+!.env.example
 .venv
 env/
 venv/
@@ -75,3 +76,12 @@ Thumbs.db
 *.zip
 RESEARCH_NOTES.md
 BLOG_DRAFT.md
+
+# Credentials
+*.json
+!server.json
+
+# Daily podcast
+episodes/
+*.mp3
+daily_podcast.log

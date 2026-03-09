@@ -1265,12 +1265,17 @@ def _ocr_google_vision_sdk(rm_files: List[Path]) -> Optional[List[str]]:
                     tmp_png_path = Path(tmp_png.name)
 
                 # Convert .rm to SVG using rmc
-                result = subprocess.run(
-                    ["rmc", "-t", "svg", "-o", str(tmp_svg_path), str(rm_file)],
-                    capture_output=True,
-                    timeout=30,
-                )
-                if result.returncode != 0:
+                rmc_ok = False
+                try:
+                    result = subprocess.run(
+                        ["rmc", "-t", "svg", "-o", str(tmp_svg_path), str(rm_file)],
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    rmc_ok = result.returncode == 0
+                except FileNotFoundError:
+                    pass  # rmc CLI not on PATH, fall through to v5/v6 renderer
+                if not rmc_ok:
                     v5_svg = _render_rm_v5_to_svg(rm_file) or _render_rm_v6_to_svg(rm_file)
                     if v5_svg is None:
                         continue
@@ -1328,8 +1333,8 @@ def _ocr_google_vision_sdk(rm_files: List[Path]) -> Optional[List[str]]:
                 # Page rendering timed out - skip this page and continue
                 pass
             except FileNotFoundError:
-                # rmc not installed
-                return None
+                # External tool not found - skip this page
+                pass
             finally:
                 if tmp_svg_path:
                     tmp_svg_path.unlink(missing_ok=True)
@@ -1376,12 +1381,17 @@ def _ocr_tesseract(rm_files: List[Path]) -> Optional[List[str]]:
                     tmp_png_path = Path(tmp_png.name)
 
                 # Convert .rm to SVG using rmc
-                result = subprocess.run(
-                    ["rmc", "-t", "svg", "-o", str(tmp_svg_path), str(rm_file)],
-                    capture_output=True,
-                    timeout=30,
-                )
-                if result.returncode != 0:
+                rmc_ok = False
+                try:
+                    result = subprocess.run(
+                        ["rmc", "-t", "svg", "-o", str(tmp_svg_path), str(rm_file)],
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    rmc_ok = result.returncode == 0
+                except FileNotFoundError:
+                    pass  # rmc CLI not on PATH, fall through to v5/v6 renderer
+                if not rmc_ok:
                     v5_svg = _render_rm_v5_to_svg(rm_file) or _render_rm_v6_to_svg(rm_file)
                     if v5_svg is None:
                         continue
@@ -1446,8 +1456,8 @@ def _ocr_tesseract(rm_files: List[Path]) -> Optional[List[str]]:
                 # Page rendering timed out - skip this page and continue
                 pass
             except FileNotFoundError:
-                # rmc not installed
-                return None
+                # External tool not found - skip this page
+                pass
             finally:
                 if tmp_svg_path:
                     tmp_svg_path.unlink(missing_ok=True)
