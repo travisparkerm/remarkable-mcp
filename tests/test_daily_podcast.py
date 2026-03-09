@@ -7,6 +7,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from daily_podcast.config import PodcastConfig
+from daily_podcast.extract import _parse_date_header, filter_content_by_date
 from daily_podcast.feed import generate_feed
 from daily_podcast.pipeline import run_pipeline
 
@@ -96,3 +97,138 @@ def test_pipeline_no_notes_skips():
         with patch("daily_podcast.pipeline.extract_notes", return_value=""):
             result = run_pipeline(config, target)
             assert result is False
+
+
+# --- Date header parsing tests ---
+
+
+class TestParseDateHeader:
+    def test_long_month_day_year(self):
+        assert _parse_date_header("March 9, 2026") == datetime(2026, 3, 9)
+
+    def test_short_month_day_year(self):
+        assert _parse_date_header("Mar 9, 2026") == datetime(2026, 3, 9)
+
+    def test_month_day_year_no_comma(self):
+        assert _parse_date_header("March 9 2026") == datetime(2026, 3, 9)
+
+    def test_day_month_year(self):
+        assert _parse_date_header("9 March 2026") == datetime(2026, 3, 9)
+
+    def test_iso_format(self):
+        assert _parse_date_header("2026-03-09") == datetime(2026, 3, 9)
+
+    def test_us_slash_format(self):
+        assert _parse_date_header("3/9/2026") == datetime(2026, 3, 9)
+
+    def test_us_dash_format(self):
+        assert _parse_date_header("3-9-2026") == datetime(2026, 3, 9)
+
+    def test_not_a_date(self):
+        assert _parse_date_header("Some random text") is None
+
+    def test_empty_line(self):
+        assert _parse_date_header("") is None
+
+    def test_whitespace_stripped(self):
+        assert _parse_date_header("  March 9, 2026  ") == datetime(2026, 3, 9)
+
+    def test_two_digit_year_month_name(self):
+        assert _parse_date_header("Mar 9, 26") == datetime(2026, 3, 9)
+
+    def test_two_digit_year_slash(self):
+        assert _parse_date_header("3/9/26") == datetime(2026, 3, 9)
+
+    def test_two_digit_year_day_month(self):
+        assert _parse_date_header("9 March 26") == datetime(2026, 3, 9)
+
+    def test_two_digit_year_dash(self):
+        assert _parse_date_header("3-9-26") == datetime(2026, 3, 9)
+
+
+class TestFilterContentByDate:
+    def test_filters_to_matching_date(self):
+        text = (
+            "March 8, 2026\n"
+            "Old notes from yesterday\n"
+            "March 9, 2026\n"
+            "Today's notes about project X\n"
+            "More details here\n"
+            "March 10, 2026\n"
+            "Tomorrow's notes"
+        )
+        result = filter_content_by_date(
+            text,
+            day_start=datetime(2026, 3, 9),
+            day_end=datetime(2026, 3, 10),
+        )
+        assert "Today's notes about project X" in result
+        assert "More details here" in result
+        assert "Old notes from yesterday" not in result
+        assert "Tomorrow's notes" not in result
+
+    def test_no_date_headers_returns_full_text(self):
+        text = "Just some notes\nwithout any date headers"
+        result = filter_content_by_date(
+            text,
+            day_start=datetime(2026, 3, 9),
+            day_end=datetime(2026, 3, 10),
+        )
+        assert result == text
+
+    def test_no_date_headers_long_text_returns_tail(self):
+        """Long docs without date headers are truncated to the tail."""
+        text = "A" * 5000 + "\nrecent content here"
+        result = filter_content_by_date(
+            text,
+            day_start=datetime(2026, 3, 9),
+            day_end=datetime(2026, 3, 10),
+            tail_chars=100,
+        )
+        assert "recent content here" in result
+        assert result.startswith("...")
+        assert len(result) < 200
+
+    def test_preamble_before_first_date_is_kept(self):
+        text = (
+            "Notebook Title\n"
+            "March 9, 2026\n"
+            "Today's notes"
+        )
+        result = filter_content_by_date(
+            text,
+            day_start=datetime(2026, 3, 9),
+            day_end=datetime(2026, 3, 10),
+        )
+        assert "Notebook Title" in result
+        assert "Today's notes" in result
+
+    def test_no_matching_dates_returns_empty(self):
+        text = (
+            "March 1, 2026\n"
+            "Old stuff\n"
+            "March 2, 2026\n"
+            "Also old"
+        )
+        result = filter_content_by_date(
+            text,
+            day_start=datetime(2026, 3, 9),
+            day_end=datetime(2026, 3, 10),
+        )
+        # Only preamble (empty) would remain
+        assert result.strip() == ""
+
+    def test_multi_day_range(self):
+        text = (
+            "March 7, 2026\nDay 7\n"
+            "March 8, 2026\nDay 8\n"
+            "March 9, 2026\nDay 9\n"
+        )
+        result = filter_content_by_date(
+            text,
+            day_start=datetime(2026, 3, 8),
+            day_end=datetime(2026, 3, 10),
+        )
+        assert "Day 8" in result
+        assert "Day 9" in result
+        assert "Day 7" not in result

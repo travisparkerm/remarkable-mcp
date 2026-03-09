@@ -3,10 +3,15 @@ Note extraction module.
 
 Connects to reMarkable Cloud, finds documents modified in a date range,
 and extracts text content (typed + handwritten via OCR).
+
+Supports date-header filtering: if notes contain date headers (e.g.
+"March 9, 2026" or "3/9/2026"), only content under dates within the
+requested range is returned.
 """
 
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,13 +23,146 @@ from daily_podcast.config import PodcastConfig
 logger = logging.getLogger(__name__)
 
 
+# Patterns for recognizing date headers in extracted text.
+# Order matters — more specific patterns are tried first.
+# All patterns accept both 2-digit and 4-digit years.
+_DATE_PATTERNS = [
+    # "March 9, 2026" / "Mar 9, 26" / "March 9 2026" / "MAR 9,26"
+    re.compile(
+        r"^(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2}),?\s*(?P<year>\d{2,4})$"
+    ),
+    # "9 March 2026" / "9 March 26"
+    re.compile(
+        r"^(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]+),?\s*(?P<year>\d{2,4})$"
+    ),
+    # "FEB 1825" — OCR artifact where "FEB 18, 25" loses the comma/space
+    # Day (1-2 digits) concatenated with 2-digit year
+    re.compile(
+        r"^(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2})(?P<year>\d{2})$"
+    ),
+    # "2026-03-09" (ISO format, 4-digit year only to avoid ambiguity with m-d-y)
+    re.compile(r"^(?P<year>\d{4})-(?P<m>\d{1,2})-(?P<d>\d{1,2})$"),
+    # "03/09/2026" or "3/9/26"
+    re.compile(r"^(?P<m>\d{1,2})/(?P<d>\d{1,2})/(?P<year>\d{2,4})$"),
+    # "03-09-2026" or "3-9-26" (only matched after ISO fails above)
+    re.compile(r"^(?P<m>\d{1,2})-(?P<d>\d{1,2})-(?P<year>\d{2,4})$"),
+]
+
+_FULL_MONTH_NAMES = [
+    "", "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+_MONTH_NAMES = {}
+for _i, _name in enumerate(_FULL_MONTH_NAMES):
+    if _name:
+        _MONTH_NAMES[_name.lower()] = _i
+        _MONTH_NAMES[_name[:3].lower()] = _i
+
+
+def _parse_date_header(line: str) -> Optional[datetime]:
+    """Try to parse a single line as a date header. Returns date or None."""
+    stripped = line.strip()
+    if not stripped or len(stripped) > 40:
+        return None
+
+    for pattern in _DATE_PATTERNS:
+        m = pattern.match(stripped)
+        if not m:
+            continue
+        try:
+            groups = m.groupdict()
+            if "month" in groups:
+                month_str = groups["month"].lower()
+                month = _MONTH_NAMES.get(month_str)
+                if month is None:
+                    continue
+                day = int(groups["day"])
+            else:
+                month = int(groups["m"])
+                day = int(groups["d"])
+            year = int(groups["year"])
+            # Expand 2-digit years: 00-99 → 2000-2099
+            if year < 100:
+                year += 2000
+            return datetime(year, month, day)
+        except (ValueError, KeyError):
+            continue
+    return None
+
+
+def filter_content_by_date(
+    text: str,
+    day_start: datetime,
+    day_end: datetime,
+    tail_chars: int = 3000,
+) -> str:
+    """
+    Filter extracted text to only include content under date headers
+    that fall within [day_start, day_end).
+
+    If no date headers are found in the text, return the last `tail_chars`
+    characters of the document (biased toward the end, where the most
+    recent content typically lives).
+    """
+    lines = text.split("\n")
+    sections: list[tuple[Optional[datetime], list[str]]] = []
+    current_date: Optional[datetime] = None
+    current_lines: list[str] = []
+    found_any_date = False
+
+    for line in lines:
+        parsed = _parse_date_header(line)
+        if parsed is not None:
+            found_any_date = True
+            # Save previous section
+            sections.append((current_date, current_lines))
+            current_date = parsed
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    # Don't forget the last section
+    sections.append((current_date, current_lines))
+
+    if not found_any_date:
+        # No date headers found — bias toward end of document where
+        # the most recent content is likely to be.
+        if len(text) <= tail_chars:
+            return text
+        return "...\n" + text[-tail_chars:]
+
+    # Keep only sections whose date falls in the range
+    # Also keep any preamble (content before the first date header) since it
+    # might be a notebook title or context.
+    # Compare as naive dates to avoid tz-aware vs tz-naive mismatch.
+    start_date = day_start.date() if hasattr(day_start, 'date') else day_start
+    end_date = day_end.date() if hasattr(day_end, 'date') else day_end
+
+    kept: list[str] = []
+    for section_date, section_lines in sections:
+        if section_date is None:
+            # Preamble before any date header — include it
+            preamble = "\n".join(section_lines).strip()
+            if preamble:
+                kept.append(preamble)
+        elif start_date <= section_date.date() < end_date:
+            kept.append("\n".join(section_lines).strip())
+
+    return "\n\n".join(kept)
+
+
 def extract_notes(
     config: PodcastConfig,
     target_date: Optional[datetime] = None,
     days: int = 1,
 ) -> str:
     """
-    Extract all notes modified in the date range from reMarkable Cloud.
+    Extract notes from reMarkable Cloud for a date range.
+
+    Documents modified in the date range are downloaded and OCR'd. Then,
+    if a document contains date headers (e.g. "March 9, 2026"), only
+    content under dates within the range is kept. Documents without date
+    headers are included in full (filtered only by modification time).
 
     Args:
         config: Pipeline configuration.
@@ -122,10 +260,19 @@ def extract_notes(
                 text_parts.append("Highlights: " + " | ".join(content["highlights"]))
 
             combined = "\n".join(text_parts).strip()
-            if combined:
-                sections.append(f"## {doc.VissibleName}\n\n{combined}")
-            else:
+            if not combined:
                 logger.info("  No extractable text in %s", doc.VissibleName)
+                continue
+
+            # Filter content by date headers within the text
+            filtered = filter_content_by_date(combined, day_start, day_end)
+            if filtered.strip():
+                sections.append(f"## {doc.VissibleName}\n\n{filtered}")
+            else:
+                logger.info(
+                    "  %s has date headers but none in target range, skipping.",
+                    doc.VissibleName,
+                )
 
         except Exception as e:
             logger.warning("Failed to extract text from %s: %s", doc.VissibleName, e)

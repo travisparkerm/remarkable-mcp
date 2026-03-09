@@ -131,6 +131,37 @@ async def stream_audio(date: str, user: User = Depends(get_current_user)):
     )
 
 
+@router.delete("/episodes/{date}")
+async def delete_episode(date: str, user: User = Depends(get_current_user)):
+    """Delete an episode and its associated files."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(Episode)
+            .where(Episode.user_id == user.id, Episode.date == date)
+        )
+        ep = result.scalar_one_or_none()
+        if ep is None:
+            raise HTTPException(status_code=404, detail="Episode not found")
+
+        # Delete audio file if it exists
+        if ep.audio_path:
+            audio_file = Path(ep.audio_path)
+            if audio_file.exists():
+                audio_file.unlink()
+
+        # Delete notes and script files
+        user_dir = DATA_DIR / "episodes" / str(user.id)
+        for prefix in ("notes", "script"):
+            f = user_dir / f"{prefix}-{date}.txt"
+            if f.exists():
+                f.unlink()
+
+        await db.delete(ep)
+        await db.commit()
+
+    return {"status": "ok"}
+
+
 # --- reMarkable device ---
 
 
@@ -213,6 +244,17 @@ async def generate_episode(
 
         # Create or reset episode record
         if existing:
+            # Clean up old files before regenerating
+            if existing.audio_path:
+                old_audio = Path(existing.audio_path)
+                if old_audio.exists():
+                    old_audio.unlink()
+            user_dir = DATA_DIR / "episodes" / str(user.id)
+            for prefix in ("notes", "script"):
+                f = user_dir / f"{prefix}-{date}.txt"
+                if f.exists():
+                    f.unlink()
+
             existing.status = "pending"
             existing.script_text = None
             existing.notes_text = None

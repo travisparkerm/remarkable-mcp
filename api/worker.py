@@ -153,10 +153,10 @@ def _run_pipeline_sync(
     notes_text = extract_notes(config, target_date)
     if not notes_text:
         return {
-            "status": "ready",
+            "status": "failed",
             "title": f"No notes for {date_str}",
             "notes_text": "",
-            "script_text": "No notes were found for this date.",
+            "script_text": "Error: No notes were found for this date.",
         }
 
     # Save raw notes

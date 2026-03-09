@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
-import { getEpisode, getAudioUrl, type Episode } from "../lib/api";
+import { useParams, Link, useNavigate } from "react-router-dom";
+import { getEpisode, getAudioUrl, deleteEpisode, type Episode } from "../lib/api";
 import AudioPlayer from "../components/AudioPlayer";
 
 const POLL_INTERVAL = 3000;
@@ -78,9 +78,11 @@ function StatusIndicator({ status }: { status: string }) {
 
 export default function Player() {
   const { date } = useParams<{ date: string }>();
+  const navigate = useNavigate();
   const [episode, setEpisode] = useState<Episode | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchEpisode = useCallback(() => {
@@ -173,13 +175,35 @@ export default function Player() {
           Back
         </Link>
 
-        {/* Date heading */}
-        <h1 className="mt-6 text-2xl font-semibold tracking-tight text-neutral-100">
-          {date}
-        </h1>
-        {episode.title && episode.status === "ready" && (
-          <p className="mt-1 text-sm text-neutral-400">{episode.title}</p>
-        )}
+        {/* Date heading + delete */}
+        <div className="mt-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">
+              {date}
+            </h1>
+            {episode.title && episode.status === "ready" && (
+              <p className="mt-1 text-sm text-neutral-400">{episode.title}</p>
+            )}
+          </div>
+          <button
+            onClick={async () => {
+              if (!date || deleting) return;
+              if (!confirm("Delete this episode? You can regenerate it afterwards.")) return;
+              setDeleting(true);
+              try {
+                await deleteEpisode(date);
+                navigate("/");
+              } catch (err: unknown) {
+                setError(err instanceof Error ? err.message : "Delete failed");
+                setDeleting(false);
+              }
+            }}
+            disabled={deleting}
+            className="rounded-lg border border-neutral-800 px-3 py-1.5 text-xs text-neutral-400 transition hover:border-red-900 hover:text-red-400 disabled:opacity-50"
+          >
+            {deleting ? "Deleting..." : "Delete"}
+          </button>
+        </div>
 
         {/* Status / Audio player */}
         <div className="mt-6">
