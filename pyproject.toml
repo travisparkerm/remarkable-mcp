@@ -48,6 +48,20 @@ podcast = [
     "python-dotenv>=1.0.0",
     "google-cloud-vision>=3.0.0",
 ]
+web = [
+    "anthropic>=0.39.0",
+    "elevenlabs>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "google-cloud-vision>=3.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.20.0",
+    "authlib>=1.3.0",
+    "python-jose[cryptography]>=3.3.0",
+    "httpx>=0.27.0",
+    "itsdangerous>=2.2.0",
+]
 
 [project.scripts]
 remarkable-mcp = "remarkable_mcp.cli:main"
@@ -58,7 +72,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["remarkable_mcp", "daily_podcast"]
+packages = ["remarkable_mcp", "daily_podcast", "api"]
 
 [tool.black]
 line-length = 100

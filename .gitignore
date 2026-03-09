@@ -85,3 +85,8 @@ BLOG_DRAFT.md
 episodes/
 *.mp3
 daily_podcast.log
+
+# Web app
+web/node_modules/
+web/dist/
+data/

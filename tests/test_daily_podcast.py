@@ -3,7 +3,7 @@
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from daily_podcast.config import PodcastConfig
@@ -26,9 +26,8 @@ def test_feed_generation_with_episodes():
         tmpdir = Path(tmpdir)
         config = _make_config(tmpdir)
 
-        # Create a fake episode
         mp3_path = tmpdir / "episode-2025-01-15.mp3"
-        mp3_path.write_bytes(b"\x00" * 16000 * 60)  # ~60 seconds at 128kbps
+        mp3_path.write_bytes(b"\x00" * 16000 * 60)
 
         script_path = tmpdir / "script-2025-01-15.txt"
         script_path.write_text("Today you worked on testing the podcast pipeline.")
@@ -48,7 +47,6 @@ def test_feed_generation_no_episodes():
     with tempfile.TemporaryDirectory() as tmpdir:
         config = _make_config(Path(tmpdir))
         feed_path = generate_feed(config)
-        # feed.xml path is returned but may not have content if no episodes
         assert feed_path == Path(tmpdir) / "feed.xml"
 
 
@@ -64,7 +62,6 @@ def test_feed_multiple_episodes_reverse_chronological():
         feed_path = generate_feed(config)
         content = feed_path.read_text()
 
-        # 15th should appear before 13th in the feed
         pos_15 = content.index("2025-01-15")
         pos_13 = content.index("2025-01-13")
         assert pos_15 < pos_13
@@ -79,13 +76,12 @@ def test_pipeline_idempotency():
         config.elevenlabs_api_key = "test"
         config.elevenlabs_voice_id = "test"
 
-        # Pre-create episode file
         (tmpdir / "episode-2025-01-15.mp3").write_bytes(b"\x00" * 1000)
 
         tz = ZoneInfo("UTC")
         target = datetime(2025, 1, 15, tzinfo=tz)
         result = run_pipeline(config, target)
-        assert result is False  # Should skip
+        assert result is False
 
 
 def test_pipeline_no_notes_skips():
