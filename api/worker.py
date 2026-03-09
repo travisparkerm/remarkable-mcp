@@ -114,6 +114,7 @@ def _run_pipeline_sync(
     """
     from daily_podcast.config import PodcastConfig, load_config
     from daily_podcast.extract import extract_notes
+    from daily_podcast.personalities import get_voice_id
     from daily_podcast.speak import generate_audio
     from daily_podcast.summarize import generate_podcast_script
 
@@ -130,8 +131,13 @@ def _run_pipeline_sync(
     config.episodes_dir = DATA_DIR / "episodes" / str(user_id)
     config.remarkable_token = device_token
 
+    # Use user's custom voice ID, or fall back to the personality's default
     if voice_id:
         config.elevenlabs_voice_id = voice_id
+    elif personality:
+        personality_voice = get_voice_id(personality)
+        if personality_voice:
+            config.elevenlabs_voice_id = personality_voice
     if voice_desc:
         config.podcast_voice = voice_desc
     if target_words:

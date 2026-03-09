@@ -239,24 +239,9 @@ export default function Settings({ user: _user }: Props) {
         {/* Voice & Style */}
         <section className="mt-8">
           <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">
-            Voice & Style
+            Episode Length
           </h2>
           <div className="mt-4 space-y-4 rounded-xl border border-neutral-900 bg-neutral-900/30 p-5">
-            <div>
-              <label className="block text-sm text-neutral-400">
-                ElevenLabs Voice ID
-              </label>
-              <input
-                type="text"
-                value={settings.elevenlabs_voice_id ?? ""}
-                onChange={(e) =>
-                  setSettings({ ...settings, elevenlabs_voice_id: e.target.value })
-                }
-                placeholder="e.g. 21m00Tcm4TlvDq8ikWAM"
-                className="mt-1 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-amber-600"
-              />
-            </div>
-
             <div>
               <label className="block text-sm text-neutral-400">
                 Target word count

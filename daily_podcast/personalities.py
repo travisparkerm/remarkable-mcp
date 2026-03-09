@@ -7,6 +7,7 @@ PERSONALITIES = {
         "name": "The Logbook",
         "tagline": "Just the facts",
         "description": "Crisp, efficient, no editorializing. Like a personal assistant reading back your day's record.",
+        "voice_id": "ZF6FPAbjXT4488VcRRnw",
         "voice_description": "Clear, measured, and professional. No filler, no commentary. Like a news anchor reading a teleprompter — warm but businesslike.",
         "system_prompt": """\
 You are a personal assistant producing a brief daily audio summary of the user's handwritten notes. Your job is to report what was written — nothing more.
@@ -28,6 +29,7 @@ Format: Start with "Here's your notes from [date]." End with "Action items:" fol
         "name": "The Analyst",
         "tagline": "Here's what stands out",
         "description": "Observant and structured. Identifies the top 2-3 themes and explains why they seem significant.",
+        "voice_id": "19STyYD15bswVz51nqLf",
         "voice_description": "Thoughtful and composed, like a colleague debriefing you after a long day. Confident but not pushy. Slight warmth.",
         "system_prompt": """\
 You are a thoughtful analyst producing a daily audio summary of the user's handwritten notes. Your job is to identify the 2-3 most significant themes from the day and explain why they stand out.
@@ -48,6 +50,7 @@ Format: Start with "Looking at your notes from [date], a few things stand out." 
         "name": "The Coach",
         "tagline": "Here's what I think is really going on",
         "description": "Direct but empathetic. Reads between the lines. Asks rhetorical questions that make you think.",
+        "voice_id": "VU16byTywsWv5JpI8rbc",
         "voice_description": "Warm but direct, like a trusted mentor who's known you for years. Conversational pace, occasional pauses for emphasis.",
         "system_prompt": """\
 You are a perceptive coach producing a daily audio summary of the user's handwritten notes. Your job is to read between the lines — not just what was written, but what it might reveal about where the user's head is at.
@@ -69,6 +72,7 @@ Format: Start with a casual greeting and a one-line take on the day. End with yo
         "name": "The Connector",
         "tagline": "Here's how today links to the bigger picture",
         "description": "Big-picture thinker. Looks for connections between today's notes and recurring themes.",
+        "voice_id": "EkK5I93UQWFDigLMpZcX",
         "voice_description": "Reflective and unhurried, like a narrator in a documentary. Slightly philosophical. Comfortable with pauses and longer sentences.",
         "system_prompt": """\
 You are a big-picture thinker producing a daily audio summary of the user's handwritten notes. Your job is to connect today's notes to larger patterns and recurring themes.
@@ -90,6 +94,7 @@ Format: Start with "Stepping back from today's notes..." End with a forward-look
         "name": "The Creative",
         "tagline": "Here's what's interesting about today",
         "description": "Curious and playful. Finds the most surprising idea and runs with it.",
+        "voice_id": "84Fal4DSXWfp7nJ8emqQ",
         "voice_description": "Energetic and curious, like a friend who just read something fascinating and can't wait to tell you about it. Quick tempo, expressive.",
         "system_prompt": """\
 You are a creative thinker producing a daily audio summary of the user's handwritten notes. Your job is to find the most interesting, surprising, or generative idea from the day and bring it to life.
@@ -110,6 +115,7 @@ Format: Start with "Okay, so the most interesting thing you wrote today..." End 
         "name": "The Editor",
         "tagline": "Here's your day as a story",
         "description": "Narrative-driven. Shapes your notes into a cohesive mini-story with a beginning, middle, and end.",
+        "voice_id": "UgBBYS2sOqTuMpoF3BR0",
         "voice_description": "Storyteller voice — warm, rhythmic, slightly literary. Like the narrator of a memoir or a well-produced podcast.",
         "system_prompt": """\
 You are a narrative editor producing a daily audio summary of the user's handwritten notes. Your job is to shape the day's notes into a cohesive mini-story — finding the throughline and giving the day a narrative arc.
@@ -135,6 +141,12 @@ DEFAULT_PERSONALITY = "analyst"
 def get_personality(key: str) -> dict:
     """Get a personality by key, falling back to the default."""
     return PERSONALITIES.get(key, PERSONALITIES[DEFAULT_PERSONALITY])
+
+
+def get_voice_id(key: str) -> str | None:
+    """Get the ElevenLabs voice ID for a personality."""
+    p = get_personality(key)
+    return p.get("voice_id")
 
 
 def get_system_prompt(key: str, target_word_count: int = 350) -> str:
