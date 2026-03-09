@@ -127,7 +127,7 @@ async def register_device(
     body: RegisterDeviceRequest, user: User = Depends(get_current_user)
 ):
     """Register a reMarkable device using a one-time code."""
-    from remarkable_mcp.api import register_device as rm_register
+    from remarkable_mcp.api import register_and_get_token as rm_register
 
     try:
         device_token = rm_register(body.code)

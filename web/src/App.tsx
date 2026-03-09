@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { getMe, type User } from "./lib/api";
+import { getMe, setToken, clearToken, type User } from "./lib/api";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Player from "./pages/Player";
@@ -25,6 +25,15 @@ export default function App() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    // Check for token in URL (OAuth redirect)
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (token) {
+      setToken(token);
+      // Clean the URL
+      window.history.replaceState({}, "", "/");
+    }
+
     getMe()
       .then(setUser)
       .catch(() => setUser(null))
@@ -32,6 +41,7 @@ export default function App() {
   }, []);
 
   const handleLogout = () => {
+    clearToken();
     setUser(null);
     navigate("/login");
   };

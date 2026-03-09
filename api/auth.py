@@ -7,11 +7,16 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from authlib.integrations.starlette_client import OAuth
+from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jose import jwt
 from sqlalchemy import select
 
 from api.database import User, UserSettings, async_session
+
+# Load env files before reading config
+load_dotenv(".env.local")
+load_dotenv(".env")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -20,7 +25,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 APP_SECRET_KEY = os.environ.get("APP_SECRET_KEY", "change-me-in-production")
-APP_URL = os.environ.get("APP_URL", "http://localhost:8000")
+APP_URL = os.environ.get("APP_URL", "http://localhost:5173")
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_DAYS = 30
 COOKIE_NAME = "session"
@@ -50,8 +56,13 @@ def create_session_token(user_id: int) -> str:
 
 
 async def get_current_user(request: Request) -> User:
-    """Dependency: extract and validate session cookie, return User."""
-    token = request.cookies.get(COOKIE_NAME)
+    """Dependency: extract token from Authorization header or query param."""
+    token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    if not token:
+        token = request.query_params.get("token")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -118,17 +129,12 @@ async def callback(request: Request):
 
     session_token = create_session_token(user.id)
 
-    response = Response(status_code=302)
-    response.headers["location"] = APP_URL
-    response.set_cookie(
-        COOKIE_NAME,
-        session_token,
-        httponly=True,
-        samesite="lax",
-        max_age=JWT_EXPIRY_DAYS * 86400,
-        secure=APP_URL.startswith("https"),
-    )
-    return response
+    # Return token via query param so the SPA can set it client-side
+    from urllib.parse import urlencode
+    redirect_url = f"{APP_URL}?{urlencode({'token': session_token})}"
+
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url=redirect_url, status_code=302)
 
 
 @router.get("/me")
