@@ -44,6 +44,18 @@ class SettingsUpdate(BaseModel):
     elevenlabs_voice_id: str | None = None
     podcast_voice_description: str | None = None
     target_word_count: int | None = None
+    personality: str | None = None
+
+
+# --- Personalities ---
+
+
+@router.get("/personalities")
+async def list_personalities():
+    """List all available podcast personalities."""
+    from daily_podcast.personalities import list_personalities
+
+    return list_personalities()
 
 
 # --- Episodes ---
@@ -142,6 +154,20 @@ async def register_device(
     return {"status": "ok", "message": "Device registered successfully"}
 
 
+@router.post("/remarkable/disconnect")
+async def disconnect_device(user: User = Depends(get_current_user)):
+    """Remove all registered reMarkable devices for the user."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(RemarkableDevice).where(RemarkableDevice.user_id == user.id)
+        )
+        devices = result.scalars().all()
+        for device in devices:
+            await db.delete(device)
+        await db.commit()
+    return {"status": "ok"}
+
+
 @router.get("/remarkable/status")
 async def remarkable_status(user: User = Depends(get_current_user)):
     """Check whether the user has a connected reMarkable device."""
@@ -179,15 +205,19 @@ async def generate_episode(
             .where(Episode.user_id == user.id, Episode.date == date)
         )
         existing = result.scalar_one_or_none()
-        if existing and existing.status in ("processing", "ready"):
+        if existing and existing.status == "ready":
             return {
                 "status": existing.status,
-                "message": f"Episode is already {existing.status}",
+                "message": "Episode is already ready",
             }
 
         # Create or reset episode record
         if existing:
             existing.status = "pending"
+            existing.script_text = None
+            existing.notes_text = None
+            existing.audio_path = None
+            existing.title = None
             await db.commit()
             episode_id = existing.id
         else:
@@ -225,6 +255,7 @@ async def get_settings(user: User = Depends(get_current_user)):
             "elevenlabs_voice_id": settings.elevenlabs_voice_id,
             "podcast_voice_description": settings.podcast_voice_description,
             "target_word_count": settings.target_word_count,
+            "personality": settings.personality or "analyst",
         }
 
 
@@ -250,6 +281,8 @@ async def update_settings(
             settings.podcast_voice_description = body.podcast_voice_description
         if body.target_word_count is not None:
             settings.target_word_count = body.target_word_count
+        if body.personality is not None:
+            settings.personality = body.personality
 
         await db.commit()
 

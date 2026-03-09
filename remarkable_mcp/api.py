@@ -50,12 +50,13 @@ def get_rmapi():
     # Cloud API mode
     from remarkable_mcp.sync import load_client_from_token
 
-    # If token is provided via environment, use it
-    if REMARKABLE_TOKEN:
+    # If token is provided via environment, use it (re-read at call time)
+    token = os.environ.get("REMARKABLE_TOKEN") or REMARKABLE_TOKEN
+    if token:
         # Also save to ~/.rmapi for compatibility
         rmapi_file = Path.home() / ".rmapi"
-        rmapi_file.write_text(REMARKABLE_TOKEN)
-        return load_client_from_token(REMARKABLE_TOKEN)
+        rmapi_file.write_text(token)
+        return load_client_from_token(token)
 
     # Load from file
     rmapi_file = Path.home() / ".rmapi"

@@ -61,6 +61,7 @@ async def run_pipeline_for_user(user_id: int, date_str: str):
         voice_id = settings.elevenlabs_voice_id if settings else None
         voice_desc = settings.podcast_voice_description if settings else None
         target_words = settings.target_word_count if settings else 350
+        personality = settings.personality if settings else "analyst"
 
     # Run the CPU/IO-bound pipeline in a thread
     try:
@@ -73,6 +74,7 @@ async def run_pipeline_for_user(user_id: int, date_str: str):
             voice_id,
             voice_desc,
             target_words,
+            personality,
         )
     except Exception as e:
         logger.exception("Pipeline failed for user %d, date %s", user_id, date_str)
@@ -104,6 +106,7 @@ def _run_pipeline_sync(
     voice_id: str | None,
     voice_desc: str | None,
     target_words: int,
+    personality: str = "analyst",
 ) -> dict:
     """
     Synchronous pipeline execution. Runs in a thread.
@@ -114,11 +117,15 @@ def _run_pipeline_sync(
     from daily_podcast.speak import generate_audio
     from daily_podcast.summarize import generate_podcast_script
 
-    # Set reMarkable token env var for the API client
-    os.environ["REMARKABLE_TOKEN"] = device_token
-
-    # Build config, starting from env-based defaults then overriding per-user
+    # Build config from env-based defaults
     config = load_config()
+
+    # Override with the user's device token AFTER load_config
+    # (load_config loads .env.local which may have a stale REMARKABLE_TOKEN)
+    rmapi_file = Path.home() / ".rmapi"
+    rmapi_file.write_text(device_token)
+    os.environ["REMARKABLE_TOKEN"] = device_token
+    config.remarkable_token = device_token
     config.timezone = timezone_str
     config.episodes_dir = DATA_DIR / "episodes" / str(user_id)
     config.remarkable_token = device_token
@@ -152,7 +159,7 @@ def _run_pipeline_sync(
 
     # Step 2: Generate script
     logger.info("User %d: generating script for %s", user_id, date_str)
-    script = generate_podcast_script(notes_text, config)
+    script = generate_podcast_script(notes_text, config, personality=personality)
 
     script_path = config.episodes_dir / f"script-{date_str}.txt"
     script_path.write_text(script)

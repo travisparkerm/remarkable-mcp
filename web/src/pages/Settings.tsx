@@ -5,7 +5,9 @@ import {
   updateSettings,
   getRemarkableStatus,
   registerDevice,
+  getPersonalities,
   type Settings as SettingsType,
+  type Personality,
   type User,
 } from "../lib/api";
 
@@ -23,6 +25,7 @@ const TIMEZONES = [
   "Europe/London",
   "Europe/Paris",
   "Europe/Berlin",
+  "Europe/Warsaw",
   "Asia/Tokyo",
   "Asia/Shanghai",
   "Australia/Sydney",
@@ -31,6 +34,7 @@ const TIMEZONES = [
 
 export default function Settings({ user: _user }: Props) {
   const [settings, setSettings] = useState<SettingsType>({});
+  const [personalities, setPersonalities] = useState<Personality[]>([]);
   const [remarkableConnected, setRemarkableConnected] = useState(false);
   const [deviceCode, setDeviceCode] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -40,10 +44,11 @@ export default function Settings({ user: _user }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([getSettings(), getRemarkableStatus()])
-      .then(([s, status]) => {
+    Promise.all([getSettings(), getRemarkableStatus(), getPersonalities()])
+      .then(([s, status, p]) => {
         setSettings(s);
         setRemarkableConnected(status.connected);
+        setPersonalities(p);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -68,8 +73,7 @@ export default function Settings({ user: _user }: Props) {
     setSaving(true);
     setSaved(false);
     try {
-      const updated = await updateSettings(settings);
-      setSettings(updated);
+      await updateSettings(settings);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
@@ -130,6 +134,26 @@ export default function Settings({ user: _user }: Props) {
               </span>
             </div>
 
+            {remarkableConnected && (
+              <button
+                onClick={async () => {
+                  try {
+                    const token = localStorage.getItem("session_token");
+                    await fetch("/api/remarkable/disconnect", {
+                      method: "POST",
+                      headers: {
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                      },
+                    });
+                    setRemarkableConnected(false);
+                  } catch {}
+                }}
+                className="mt-3 text-xs text-red-400 transition hover:text-red-300"
+              >
+                Disconnect device
+              </button>
+            )}
+
             {!remarkableConnected && (
               <div className="mt-4 space-y-3">
                 <div className="flex gap-2">
@@ -167,6 +191,51 @@ export default function Settings({ user: _user }: Props) {
           </div>
         </section>
 
+        {/* Podcast Personality */}
+        <section className="mt-8">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">
+            Podcast Personality
+          </h2>
+          <p className="mt-1 text-xs text-neutral-600">
+            Choose how your daily summary is framed
+          </p>
+          <div className="mt-4 grid gap-3">
+            {personalities.map((p) => {
+              const selected = (settings.personality || "analyst") === p.key;
+              return (
+                <button
+                  key={p.key}
+                  onClick={() =>
+                    setSettings({ ...settings, personality: p.key })
+                  }
+                  className={`rounded-xl border p-4 text-left transition ${
+                    selected
+                      ? "border-amber-600 bg-amber-950/30"
+                      : "border-neutral-900 bg-neutral-900/30 hover:border-neutral-800"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`h-2 w-2 rounded-full ${selected ? "bg-amber-500" : "bg-neutral-700"}`}
+                    />
+                    <span
+                      className={`text-sm font-medium ${selected ? "text-amber-400" : "text-neutral-200"}`}
+                    >
+                      {p.name}
+                    </span>
+                    <span className="text-xs text-neutral-500">
+                      — {p.tagline}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 pl-4 text-xs text-neutral-500">
+                    {p.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         {/* Voice & Style */}
         <section className="mt-8">
           <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">
@@ -190,21 +259,6 @@ export default function Settings({ user: _user }: Props) {
 
             <div>
               <label className="block text-sm text-neutral-400">
-                Podcast voice description
-              </label>
-              <textarea
-                value={settings.voice_description ?? ""}
-                onChange={(e) =>
-                  setSettings({ ...settings, voice_description: e.target.value })
-                }
-                placeholder="Describe the tone and style of your podcast voice..."
-                rows={3}
-                className="mt-1 w-full resize-none rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-amber-600"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm text-neutral-400">
                 Target word count
               </label>
               <input
@@ -218,7 +272,7 @@ export default function Settings({ user: _user }: Props) {
                       : undefined,
                   })
                 }
-                placeholder="500"
+                placeholder="350"
                 className="mt-1 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-amber-600"
               />
             </div>

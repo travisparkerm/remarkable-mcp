@@ -81,6 +81,7 @@ class UserSettings(Base):
     elevenlabs_voice_id: Mapped[str] = mapped_column(String(255), nullable=True)
     podcast_voice_description: Mapped[str] = mapped_column(Text, nullable=True)
     target_word_count: Mapped[int] = mapped_column(Integer, default=350)
+    personality: Mapped[str] = mapped_column(String(32), default="analyst")
 
     user: Mapped["User"] = relationship(back_populates="settings")
 

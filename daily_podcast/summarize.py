@@ -9,52 +9,40 @@ import logging
 import anthropic
 
 from daily_podcast.config import PodcastConfig
+from daily_podcast.personalities import get_system_prompt
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-You are a personal podcast host creating a short daily audio recap of handwritten notes.
 
-Your job is to synthesize the day's notes into a natural, conversational podcast script
-that sounds like a thoughtful evening reflection — not a robotic readback.
-
-Guidelines:
-- Tone: {voice}
-- Target length: {target_length} words (roughly 2 minutes spoken)
-- Structure: brief intro → key themes/ideas → action items or follow-ups → brief editorial reflection
-- Synthesize and connect ideas across separate notes — don't just list them
-- Call out any action items or to-dos you find
-- Add light editorial commentary (e.g., "You spent a lot of time on X today — seems like that's becoming a priority")
-- Handle messy/incomplete OCR gracefully — skip gibberish, work with what's intelligible
-- If notes are very short or sparse, make the script proportionally shorter (don't pad)
-- Write the script as spoken text only — no stage directions, no [brackets], no headings
-- Address the listener as "you" (it's their personal notes)
-- Start directly with content (e.g., "Hey, so today was interesting..." not "Welcome to episode 47...")
-"""
-
-
-def generate_podcast_script(notes_text: str, config: PodcastConfig) -> str:
+def generate_podcast_script(
+    notes_text: str, config: PodcastConfig, personality: str = ""
+) -> str:
     """
     Generate a podcast script from extracted notes using Claude API.
 
     Args:
         notes_text: Extracted and concatenated notes text.
         config: Pipeline configuration.
+        personality: Personality key (e.g. "analyst", "coach"). Falls back to default.
 
     Returns:
-        Podcast script text (300-400 words).
+        Podcast script text.
 
     Raises:
         anthropic.APIError: If the API call fails.
     """
     client = anthropic.Anthropic(api_key=config.anthropic_api_key)
 
-    system = SYSTEM_PROMPT.format(
-        voice=config.podcast_voice,
-        target_length=config.podcast_target_length,
+    system = get_system_prompt(
+        personality or "analyst",
+        target_word_count=config.podcast_target_length,
     )
 
-    logger.info("Generating podcast script (target: %d words)...", config.podcast_target_length)
+    logger.info(
+        "Generating podcast script (personality=%s, target: %d words)...",
+        personality or "analyst",
+        config.podcast_target_length,
+    )
 
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
