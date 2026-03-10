@@ -151,6 +151,21 @@ class TestParseDateHeader:
     def test_two_digit_year_dash(self):
         assert _parse_date_header("3-9-26") == datetime(2026, 3, 9)
 
+    def test_inline_date_after_dashes(self):
+        assert _parse_date_header("Morning Prayer ------------ Mar 20, 26") == datetime(2026, 3, 20)
+
+    def test_inline_date_after_em_dash(self):
+        assert _parse_date_header("Journal Entry — March 9, 2026") == datetime(2026, 3, 9)
+
+    def test_inline_date_after_en_dash(self):
+        assert _parse_date_header("Notes – 3/9/26") == datetime(2026, 3, 9)
+
+    def test_inline_date_long_prefix(self):
+        assert _parse_date_header("MORNING PRAYER ------------ Mar 10, 26") == datetime(2026, 3, 10)
+
+    def test_no_separator_no_match_long_line(self):
+        assert _parse_date_header("Some random text with no date at all here") is None
+
 
 class TestFilterContentByDate:
     def test_filters_to_matching_date(self):
@@ -223,6 +238,25 @@ class TestFilterContentByDate:
         )
         # Only preamble (empty) would remain
         assert result.strip() == ""
+
+    def test_inline_date_headers(self):
+        """Date headers with separators (e.g. journal entries) are recognized."""
+        text = (
+            "2026 PRAYER JOURNAL\n"
+            "Morning Prayer ------------ Jan 2, 26\n"
+            "currently in lyon, france\n"
+            "Morning Prayer ------------ Mar 10, 26\n"
+            "working on podcast project today\n"
+            "grateful for progress\n"
+        )
+        result = filter_content_by_date(
+            text,
+            day_start=datetime(2026, 3, 10),
+            day_end=datetime(2026, 3, 11),
+        )
+        assert "working on podcast project today" in result
+        assert "grateful for progress" in result
+        assert "currently in lyon, france" not in result
 
     def test_multi_day_range(self):
         text = (

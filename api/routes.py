@@ -336,6 +336,7 @@ async def stream_audio(episode_id: int, user: User = Depends(get_current_user)):
         audio_file,
         media_type="audio/mpeg",
         filename=f"episode-{ep.date}.mp3",
+        headers={"Cache-Control": "no-cache"},
     )
 
 

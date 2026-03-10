@@ -96,14 +96,10 @@ def _path_matches_scope(doc_path: str, scope_paths: list[str]) -> bool:
     return False
 
 
-def _parse_date_header(line: str) -> Optional[datetime]:
-    """Try to parse a single line as a date header. Returns date or None."""
-    stripped = line.strip()
-    if not stripped or len(stripped) > 40:
-        return None
-
+def _extract_date_from_text(text: str) -> Optional[datetime]:
+    """Try to match text against known date patterns. Returns date or None."""
     for pattern in _DATE_PATTERNS:
-        m = pattern.match(stripped)
+        m = pattern.match(text)
         if not m:
             continue
         try:
@@ -118,7 +114,6 @@ def _parse_date_header(line: str) -> Optional[datetime]:
                 month = int(groups["m"])
                 day = int(groups["d"])
             year = int(groups["year"])
-            # Expand 2-digit years: 00-99 → 2000-2099
             if year < 100:
                 year += 2000
             return datetime(year, month, day)
@@ -127,19 +122,49 @@ def _parse_date_header(line: str) -> Optional[datetime]:
     return None
 
 
-def filter_content_by_date(
+# Pattern to split on common separators that precede an inline date,
+# e.g. "Morning Prayer ------------ Mar 20, 26" or "TOPIC — 3/9/26"
+_INLINE_DATE_SEP = re.compile(r"[-]{2,}|[—–]|[|/]{2,}")
+
+
+def _parse_date_header(line: str) -> Optional[datetime]:
+    """Try to parse a single line as a date header. Returns date or None.
+
+    Handles both standalone dates ("March 9, 2026") and inline dates
+    where the date appears after a separator ("Morning Prayer --- Mar 9, 26").
+    """
+    stripped = line.strip()
+    if not stripped or len(stripped) > 120:
+        return None
+
+    # First try: the whole line is a date (short lines only)
+    if len(stripped) <= 40:
+        result = _extract_date_from_text(stripped)
+        if result is not None:
+            return result
+
+    # Second try: date appears after a separator (dashes, pipes, em-dashes)
+    parts = _INLINE_DATE_SEP.split(stripped)
+    if len(parts) > 1:
+        # Check the last segment — date is typically at the end
+        tail = parts[-1].strip()
+        if tail:
+            result = _extract_date_from_text(tail)
+            if result is not None:
+                return result
+
+    return None
+
+
+def _filter_content_by_date_regex(
     text: str,
     day_start: datetime,
     day_end: datetime,
     tail_chars: int = 3000,
 ) -> str:
     """
-    Filter extracted text to only include content under date headers
-    that fall within [day_start, day_end).
-
-    If no date headers are found in the text, return the last `tail_chars`
-    characters of the document (biased toward the end, where the most
-    recent content typically lives).
+    Regex-based fallback: filter text to content under date headers
+    within [day_start, day_end). Used when AI filtering is unavailable.
     """
     lines = text.split("\n")
     sections: list[tuple[Optional[datetime], list[str]]] = []
@@ -151,34 +176,25 @@ def filter_content_by_date(
         parsed = _parse_date_header(line)
         if parsed is not None:
             found_any_date = True
-            # Save previous section
             sections.append((current_date, current_lines))
             current_date = parsed
             current_lines = [line]
         else:
             current_lines.append(line)
 
-    # Don't forget the last section
     sections.append((current_date, current_lines))
 
     if not found_any_date:
-        # No date headers found — bias toward end of document where
-        # the most recent content is likely to be.
         if len(text) <= tail_chars:
             return text
         return "...\n" + text[-tail_chars:]
 
-    # Keep only sections whose date falls in the range
-    # Also keep any preamble (content before the first date header) since it
-    # might be a notebook title or context.
-    # Compare as naive dates to avoid tz-aware vs tz-naive mismatch.
     start_date = day_start.date() if hasattr(day_start, 'date') else day_start
     end_date = day_end.date() if hasattr(day_end, 'date') else day_end
 
     kept: list[str] = []
     for section_date, section_lines in sections:
         if section_date is None:
-            # Preamble before any date header — include it
             preamble = "\n".join(section_lines).strip()
             if preamble:
                 kept.append(preamble)
@@ -186,6 +202,88 @@ def filter_content_by_date(
             kept.append("\n".join(section_lines).strip())
 
     return "\n\n".join(kept)
+
+
+def _filter_content_by_date_ai(
+    text: str,
+    day_start: datetime,
+    day_end: datetime,
+    anthropic_api_key: str,
+) -> Optional[str]:
+    """
+    Use Claude to identify date sections in handwritten notes and extract
+    only content written within [day_start, day_end).
+
+    Returns filtered text, or None if the AI call fails (caller should
+    fall back to regex).
+    """
+    import anthropic
+
+    start_str = day_start.strftime("%B %-d, %Y")
+    end_str = (day_end - timedelta(days=1)).strftime("%B %-d, %Y")
+
+    if start_str == end_str:
+        date_range_desc = start_str
+    else:
+        date_range_desc = f"{start_str} through {end_str}"
+
+    prompt = f"""You are analyzing OCR-extracted text from a handwritten notebook. The text contains entries from different dates. People typically write a date (in any format — "Mar 10, 26", "March 10 2026", "3/10/26", right-aligned dates, inline dates, etc.) followed by their notes for that day.
+
+Extract ONLY the content that was written on or between: {date_range_desc}
+
+Rules:
+- Look for any date indicators: explicit dates, month/day headers, or contextual clues
+- Include the date header line itself and all content under it until the next date
+- If the notebook has a title/header before any dates, include it for context
+- If you cannot identify any date structure, return the content from the END of the document (most recent entries are typically at the end)
+- Return ONLY the extracted text — no commentary, no explanations
+- If nothing matches the date range, return exactly: NO_MATCH
+
+Here is the notebook text:
+
+{text}"""
+
+    try:
+        client = anthropic.Anthropic(api_key=anthropic_api_key)
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = message.content[0].text.strip()
+        if result == "NO_MATCH":
+            return ""
+        return result
+    except Exception as e:
+        logger.warning("AI date filtering failed, falling back to regex: %s", e)
+        return None
+
+
+def filter_content_by_date(
+    text: str,
+    day_start: datetime,
+    day_end: datetime,
+    tail_chars: int = 3000,
+    anthropic_api_key: Optional[str] = None,
+) -> str:
+    """
+    Filter extracted text to only include content under date headers
+    that fall within [day_start, day_end).
+
+    Uses AI (Claude Haiku) when an API key is provided for robust date
+    detection in handwritten notes. Falls back to regex-based parsing.
+    """
+    # Try AI-powered filtering first (handles arbitrary date formats)
+    if anthropic_api_key and len(text) > 0:
+        ai_result = _filter_content_by_date_ai(
+            text, day_start, day_end, anthropic_api_key
+        )
+        if ai_result is not None:
+            logger.info("AI date filtering returned %d chars.", len(ai_result))
+            return ai_result
+
+    # Fallback: regex-based filtering
+    return _filter_content_by_date_regex(text, day_start, day_end, tail_chars)
 
 
 def extract_notes(
@@ -316,7 +414,10 @@ def extract_notes(
 
             # Apply date-header filtering only when time filtering is active
             if not no_time_filter:
-                filtered = filter_content_by_date(combined, day_start, day_end)
+                filtered = filter_content_by_date(
+                    combined, day_start, day_end,
+                    anthropic_api_key=config.anthropic_api_key or None,
+                )
                 if filtered.strip():
                     sections.append(f"## {doc.VissibleName}\n\n{filtered}")
                 else:

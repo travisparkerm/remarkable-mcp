@@ -81,6 +81,7 @@ async def run_pipeline_for_show(show_id: int, episode_id: int):
             device_token,
             tz,
             show_config,
+            episode_id,
         )
     except Exception as e:
         logger.exception("Pipeline failed for show %d, episode %d", show_id, episode_id)
@@ -110,6 +111,7 @@ def _run_show_pipeline_sync(
     device_token: str,
     timezone_str: str,
     show_config: dict,
+    episode_id: int = 0,
 ) -> dict:
     """
     Synchronous pipeline execution for a show. Runs in a thread.
@@ -182,7 +184,7 @@ def _run_show_pipeline_sync(
 
     # Step 3: Generate audio
     logger.info("Show '%s': generating audio", show_config["name"])
-    mp3_path = config.episodes_dir / f"{show_slug}-{date_str}.mp3"
+    mp3_path = config.episodes_dir / f"{show_slug}-{date_str}-{episode_id}.mp3"
     generate_audio(script, mp3_path, config)
 
     return {
