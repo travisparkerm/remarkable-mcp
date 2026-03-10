@@ -106,6 +106,25 @@ async def run_pipeline_for_show(show_id: int, episode_id: int):
             await db.commit()
 
 
+def _update_episode_sync(episode_id: int, **fields):
+    """Synchronously update episode fields from a worker thread."""
+    import asyncio
+
+    async def _do_update():
+        async with async_session() as db:
+            episode = await db.get(Episode, episode_id)
+            if episode:
+                for key, value in fields.items():
+                    setattr(episode, key, value)
+                await db.commit()
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_do_update())
+    finally:
+        loop.close()
+
+
 def _run_show_pipeline_sync(
     user_id: int,
     device_token: str,
@@ -160,6 +179,7 @@ def _run_show_pipeline_sync(
     scope = show_config.get("scope", "/")
 
     # Step 1: Extract notes
+    _update_episode_sync(episode_id, status="extracting")
     logger.info("Show '%s': extracting notes (window=%s, scope=%s)",
                 show_config["name"], time_window, scope)
     notes_text = extract_notes(config, now, days=days, scope=scope)
@@ -171,9 +191,10 @@ def _run_show_pipeline_sync(
             "script_text": "No notes were found for this show's scope and time window.",
         }
 
-    # Save raw notes
+    # Save raw notes + update DB so frontend can see progress
     notes_path = config.episodes_dir / f"notes-{date_str}.txt"
     notes_path.write_text(notes_text)
+    _update_episode_sync(episode_id, status="summarizing", notes_text=notes_text)
 
     # Step 2: Generate script
     logger.info("Show '%s': generating script (character=%s)", show_config["name"], character)
@@ -181,6 +202,7 @@ def _run_show_pipeline_sync(
 
     script_path = config.episodes_dir / f"script-{date_str}.txt"
     script_path.write_text(script)
+    _update_episode_sync(episode_id, status="generating_audio", title=title, script_text=script)
 
     # Step 3: Generate audio
     logger.info("Show '%s': generating audio", show_config["name"])

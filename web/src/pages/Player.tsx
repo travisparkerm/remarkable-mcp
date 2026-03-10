@@ -5,24 +5,47 @@ import AudioPlayer from "../components/AudioPlayer";
 
 const POLL_INTERVAL = 3000;
 
+const TERMINAL_STATUSES = new Set(["ready", "failed"]);
+
 const STATUS_CONFIG: Record<
   string,
-  { label: string; color: string; icon: string }
+  { label: string; color: string; icon: string; step?: number }
 > = {
   pending: {
     label: "Queued — waiting to start",
     color: "text-neutral-400",
     icon: "clock",
+    step: 0,
+  },
+  extracting: {
+    label: "Reading your reMarkable notes...",
+    color: "text-amber-400",
+    icon: "spinner",
+    step: 1,
+  },
+  summarizing: {
+    label: "Writing your podcast script...",
+    color: "text-amber-400",
+    icon: "spinner",
+    step: 2,
+  },
+  generating_audio: {
+    label: "Generating audio...",
+    color: "text-amber-400",
+    icon: "spinner",
+    step: 3,
   },
   processing: {
     label: "Generating your episode...",
     color: "text-amber-400",
     icon: "spinner",
+    step: 1,
   },
   ready: {
     label: "Ready",
     color: "text-emerald-400",
     icon: "check",
+    step: 4,
   },
   failed: {
     label: "Generation failed",
@@ -31,47 +54,104 @@ const STATUS_CONFIG: Record<
   },
 };
 
+const PIPELINE_STEPS = [
+  { key: "extracting", label: "Extract" },
+  { key: "summarizing", label: "Script" },
+  { key: "generating_audio", label: "Audio" },
+];
+
 function StatusIndicator({ status }: { status: string }) {
   const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
+  const currentStep = config.step ?? 0;
+  const isInProgress = !TERMINAL_STATUSES.has(status) && status !== "pending";
 
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-900/60 p-5">
-      {config.icon === "spinner" ? (
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
-      ) : config.icon === "check" ? (
-        <svg
-          className="h-5 w-5 text-emerald-500"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M5 13l4 4L19 7"
-          />
-        </svg>
-      ) : config.icon === "x" ? (
-        <svg
-          className="h-5 w-5 text-red-500"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M6 18L18 6M6 6l12 12"
-          />
-        </svg>
-      ) : (
-        <div className="h-2 w-2 rounded-full bg-neutral-600" />
+    <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-5">
+      {/* Progress steps */}
+      {isInProgress && (
+        <div className="mb-4 flex items-center gap-2">
+          {PIPELINE_STEPS.map((step, i) => {
+            const stepNum = i + 1;
+            const done = currentStep > stepNum;
+            const active = currentStep === stepNum;
+            return (
+              <div key={step.key} className="flex items-center gap-2 flex-1">
+                <div className="flex items-center gap-2 flex-1">
+                  <div
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium ${
+                      done
+                        ? "bg-emerald-900/50 text-emerald-400"
+                        : active
+                          ? "bg-amber-900/50 text-amber-400"
+                          : "bg-neutral-800 text-neutral-500"
+                    }`}
+                  >
+                    {done ? "\u2713" : stepNum}
+                  </div>
+                  <span
+                    className={`text-xs ${
+                      done
+                        ? "text-emerald-400"
+                        : active
+                          ? "text-amber-400"
+                          : "text-neutral-500"
+                    }`}
+                  >
+                    {step.label}
+                  </span>
+                </div>
+                {i < PIPELINE_STEPS.length - 1 && (
+                  <div
+                    className={`h-px flex-1 ${
+                      done ? "bg-emerald-800" : "bg-neutral-800"
+                    }`}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
-      <span className={`text-sm font-medium ${config.color}`}>
-        {config.label}
-      </span>
+
+      {/* Current status label */}
+      <div className="flex items-center gap-3">
+        {config.icon === "spinner" ? (
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+        ) : config.icon === "check" ? (
+          <svg
+            className="h-5 w-5 text-emerald-500"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+        ) : config.icon === "x" ? (
+          <svg
+            className="h-5 w-5 text-red-500"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
+          </svg>
+        ) : (
+          <div className="h-2 w-2 rounded-full bg-neutral-600" />
+        )}
+        <span className={`text-sm font-medium ${config.color}`}>
+          {config.label}
+        </span>
+      </div>
     </div>
   );
 }
@@ -92,10 +172,7 @@ export default function Player() {
     getEpisode(id)
       .then((ep) => {
         setEpisode(ep);
-        if (
-          (ep.status === "ready" || ep.status === "failed") &&
-          intervalRef.current
-        ) {
+        if (TERMINAL_STATUSES.has(ep.status) && intervalRef.current) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
         }
@@ -108,7 +185,7 @@ export default function Player() {
     getEpisode(id)
       .then((ep) => {
         setEpisode(ep);
-        if (ep.status === "pending" || ep.status === "processing") {
+        if (!TERMINAL_STATUSES.has(ep.status)) {
           intervalRef.current = setInterval(fetchEpisode, POLL_INTERVAL);
         }
       })
@@ -220,11 +297,16 @@ export default function Player() {
           </div>
         )}
 
-        {/* Transcript (only show for non-error content) */}
+        {/* Transcript — show as soon as available, even while audio generates */}
         {episode.script_text && !isError && (
           <div className="mt-8">
             <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-neutral-500">
               Transcript
+              {episode.status === "generating_audio" && (
+                <span className="ml-2 text-amber-500/70 normal-case tracking-normal">
+                  — audio is still generating
+                </span>
+              )}
             </h2>
             <div className="rounded-xl border border-neutral-900 bg-neutral-900/30 p-6">
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-300">
