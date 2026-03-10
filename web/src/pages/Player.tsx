@@ -77,7 +77,7 @@ function StatusIndicator({ status }: { status: string }) {
 }
 
 export default function Player() {
-  const { date } = useParams<{ date: string }>();
+  const { episodeId } = useParams<{ episodeId: string }>();
   const navigate = useNavigate();
   const [episode, setEpisode] = useState<Episode | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,12 +85,13 @@ export default function Player() {
   const [deleting, setDeleting] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const id = episodeId ? Number(episodeId) : null;
+
   const fetchEpisode = useCallback(() => {
-    if (!date) return;
-    getEpisode(date)
+    if (id === null) return;
+    getEpisode(id)
       .then((ep) => {
         setEpisode(ep);
-        // Stop polling once terminal state
         if (
           (ep.status === "ready" || ep.status === "failed") &&
           intervalRef.current
@@ -100,15 +101,13 @@ export default function Player() {
         }
       })
       .catch((err) => setError(err.message));
-  }, [date]);
+  }, [id]);
 
   useEffect(() => {
-    if (!date) return;
-    // Initial fetch
-    getEpisode(date)
+    if (id === null) return;
+    getEpisode(id)
       .then((ep) => {
         setEpisode(ep);
-        // Start polling if still in progress
         if (ep.status === "pending" || ep.status === "processing") {
           intervalRef.current = setInterval(fetchEpisode, POLL_INTERVAL);
         }
@@ -121,7 +120,7 @@ export default function Player() {
         clearInterval(intervalRef.current);
       }
     };
-  }, [date, fetchEpisode]);
+  }, [id, fetchEpisode]);
 
   if (loading) {
     return (
@@ -179,19 +178,17 @@ export default function Player() {
         <div className="mt-6 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">
-              {date}
+              {episode.title || episode.date}
             </h1>
-            {episode.title && episode.status === "ready" && (
-              <p className="mt-1 text-sm text-neutral-400">{episode.title}</p>
-            )}
+            <p className="mt-1 text-sm text-neutral-500">{episode.date}</p>
           </div>
           <button
             onClick={async () => {
-              if (!date || deleting) return;
+              if (id === null || deleting) return;
               if (!confirm("Delete this episode? You can regenerate it afterwards.")) return;
               setDeleting(true);
               try {
-                await deleteEpisode(date);
+                await deleteEpisode(id);
                 navigate("/");
               } catch (err: unknown) {
                 setError(err instanceof Error ? err.message : "Delete failed");
@@ -207,8 +204,8 @@ export default function Player() {
 
         {/* Status / Audio player */}
         <div className="mt-6">
-          {episode.status === "ready" ? (
-            <AudioPlayer src={getAudioUrl(date!)} />
+          {episode.status === "ready" && id !== null ? (
+            <AudioPlayer src={getAudioUrl(id)} />
           ) : (
             <StatusIndicator status={episode.status} />
           )}

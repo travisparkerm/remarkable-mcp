@@ -4,11 +4,15 @@ Note extraction module.
 Connects to reMarkable Cloud, finds documents modified in a date range,
 and extracts text content (typed + handwritten via OCR).
 
-Supports date-header filtering: if notes contain date headers (e.g.
-"March 9, 2026" or "3/9/2026"), only content under dates within the
-requested range is returned.
+Supports:
+- Scope filtering: restrict to specific folder/document paths
+- Time window filtering: 1d, 7d, 30d, or all
+- Date-header filtering: if notes contain date headers (e.g.
+  "March 9, 2026" or "3/9/2026"), only content under dates within the
+  requested range is returned.
 """
 
+import json
 import logging
 import os
 import re
@@ -57,6 +61,39 @@ for _i, _name in enumerate(_FULL_MONTH_NAMES):
     if _name:
         _MONTH_NAMES[_name.lower()] = _i
         _MONTH_NAMES[_name[:3].lower()] = _i
+
+
+# --- Time window helpers ---
+
+TIME_WINDOW_DAYS = {
+    "1d": 1,
+    "7d": 7,
+    "30d": 30,
+    "all": None,
+}
+
+
+def _parse_scope(scope: str) -> list[str]:
+    """Parse scope string — JSON list or single path."""
+    if not scope or scope == "/":
+        return ["/"]
+    try:
+        paths = json.loads(scope)
+        if isinstance(paths, list):
+            return [p.strip().rstrip("/") for p in paths if p.strip()]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return [scope.strip().rstrip("/")]
+
+
+def _path_matches_scope(doc_path: str, scope_paths: list[str]) -> bool:
+    """Check if a document path falls under any of the scope paths."""
+    for scope_path in scope_paths:
+        if scope_path == "/" or scope_path == "":
+            return True
+        if doc_path.startswith(scope_path):
+            return True
+    return False
 
 
 def _parse_date_header(line: str) -> Optional[datetime]:
@@ -155,9 +192,10 @@ def extract_notes(
     config: PodcastConfig,
     target_date: Optional[datetime] = None,
     days: int = 1,
+    scope: str = "/",
 ) -> str:
     """
-    Extract notes from reMarkable Cloud for a date range.
+    Extract notes from reMarkable Cloud for a date range and scope.
 
     Documents modified in the date range are downloaded and OCR'd. Then,
     if a document contains date headers (e.g. "March 9, 2026"), only
@@ -168,6 +206,9 @@ def extract_notes(
         config: Pipeline configuration.
         target_date: End date of the range. Defaults to today in configured timezone.
         days: Number of days to look back (1 = just target_date, 7 = last week).
+            Use None or 0 for "all time" (no time filter).
+        scope: Folder/document path(s) to restrict extraction to.
+            Can be a single path string or JSON list of paths.
 
     Returns:
         Concatenated text with document titles as section headers.
@@ -180,52 +221,61 @@ def extract_notes(
     if target_date is None:
         target_date = datetime.now(tz)
 
-    # Date range boundaries
-    day_end = target_date.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    day_start = day_end - timedelta(days=days)
+    scope_paths = _parse_scope(scope)
+    no_time_filter = days is None or days == 0
 
-    logger.info(
-        "Extracting notes from %s to %s (%d day(s))",
-        day_start.strftime("%Y-%m-%d"),
-        (day_end - timedelta(days=1)).strftime("%Y-%m-%d"),
-        days,
-    )
+    # Date range boundaries (only used if time filtering is active)
+    if not no_time_filter:
+        day_end = target_date.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        day_start = day_end - timedelta(days=days)
+    else:
+        day_start = None
+        day_end = None
+
+    if no_time_filter:
+        logger.info("Extracting all notes (no time filter), scope: %s", scope_paths)
+    else:
+        logger.info(
+            "Extracting notes from %s to %s (%d day(s)), scope: %s",
+            day_start.strftime("%Y-%m-%d"),
+            (day_end - timedelta(days=1)).strftime("%Y-%m-%d"),
+            days,
+            scope_paths,
+        )
 
     client = get_rmapi()
     all_items = client.get_meta_items()
     items_by_id = get_items_by_id(all_items)
 
-    # Filter to documents (not folders) modified in date range
-    root_path = config.remarkable_root_path.strip().rstrip("/")
+    # Filter to documents (not folders) within scope and time range
     matched_docs = []
 
     for item in all_items:
         if item.is_folder:
             continue
-        if item.last_modified is None:
+
+        # Filter by scope
+        doc_path = get_item_path(item, items_by_id)
+        if not _path_matches_scope(doc_path, scope_paths):
             continue
 
-        # Make last_modified timezone-aware if it isn't already
-        mod_time = item.last_modified
-        if mod_time.tzinfo is None:
-            mod_time = mod_time.replace(tzinfo=tz)
-
-        if not (day_start <= mod_time < day_end):
-            continue
-
-        # Filter by root path if configured
-        if root_path and root_path != "/":
-            doc_path = get_item_path(item, items_by_id)
-            if not doc_path.startswith(root_path):
+        # Filter by time window (if applicable)
+        if not no_time_filter:
+            if item.last_modified is None:
+                continue
+            mod_time = item.last_modified
+            if mod_time.tzinfo is None:
+                mod_time = mod_time.replace(tzinfo=tz)
+            if not (day_start <= mod_time < day_end):
                 continue
 
         matched_docs.append(item)
 
     if not matched_docs:
-        logger.info("No documents modified in date range.")
+        logger.info("No documents matched scope/time filter.")
         return ""
 
-    logger.info("Found %d document(s) modified in date range.", len(matched_docs))
+    logger.info("Found %d document(s) matching scope/time filter.", len(matched_docs))
 
     # Extract text from each document
     sections: List[str] = []
@@ -264,15 +314,19 @@ def extract_notes(
                 logger.info("  No extractable text in %s", doc.VissibleName)
                 continue
 
-            # Filter content by date headers within the text
-            filtered = filter_content_by_date(combined, day_start, day_end)
-            if filtered.strip():
-                sections.append(f"## {doc.VissibleName}\n\n{filtered}")
+            # Apply date-header filtering only when time filtering is active
+            if not no_time_filter:
+                filtered = filter_content_by_date(combined, day_start, day_end)
+                if filtered.strip():
+                    sections.append(f"## {doc.VissibleName}\n\n{filtered}")
+                else:
+                    logger.info(
+                        "  %s has date headers but none in target range, skipping.",
+                        doc.VissibleName,
+                    )
             else:
-                logger.info(
-                    "  %s has date headers but none in target range, skipping.",
-                    doc.VissibleName,
-                )
+                # All-time: include the full document
+                sections.append(f"## {doc.VissibleName}\n\n{combined}")
 
         except Exception as e:
             logger.warning("Failed to extract text from %s: %s", doc.VissibleName, e)
@@ -284,4 +338,43 @@ def extract_notes(
 
     result = "\n\n---\n\n".join(sections)
     logger.info("Extracted %d characters from %d document(s).", len(result), len(sections))
+    return result
+
+
+def browse_library(device_token: str) -> list[dict]:
+    """
+    Browse the reMarkable library and return folder/document tree.
+
+    Returns a flat list of items with path, type, and metadata.
+    """
+    import os
+    from pathlib import Path as _Path
+
+    from remarkable_mcp.api import get_item_path, get_items_by_id, get_rmapi
+
+    # Set up token
+    rmapi_file = _Path.home() / ".rmapi"
+    rmapi_file.write_text(device_token)
+    os.environ["REMARKABLE_TOKEN"] = device_token
+
+    client = get_rmapi()
+    all_items = client.get_meta_items()
+    items_by_id = get_items_by_id(all_items)
+
+    result = []
+    for item in all_items:
+        path = get_item_path(item, items_by_id)
+        entry = {
+            "id": item.ID,
+            "name": item.VissibleName,
+            "path": path,
+            "is_folder": item.is_folder,
+            "parent_id": item.Parent if hasattr(item, "Parent") else None,
+        }
+        if item.last_modified:
+            entry["last_modified"] = item.last_modified.isoformat()
+        result.append(entry)
+
+    # Sort: folders first, then alphabetically
+    result.sort(key=lambda x: (not x["is_folder"], x["path"].lower()))
     return result

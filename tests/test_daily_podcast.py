@@ -7,7 +7,13 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from daily_podcast.config import PodcastConfig
-from daily_podcast.extract import _parse_date_header, filter_content_by_date
+from daily_podcast.extract import (
+    _parse_date_header,
+    _parse_scope,
+    _path_matches_scope,
+    filter_content_by_date,
+    TIME_WINDOW_DAYS,
+)
 from daily_podcast.feed import generate_feed
 from daily_podcast.pipeline import run_pipeline
 
@@ -232,3 +238,49 @@ class TestFilterContentByDate:
         assert "Day 8" in result
         assert "Day 9" in result
         assert "Day 7" not in result
+
+
+# --- Scope parsing tests ---
+
+
+class TestParseScope:
+    def test_root(self):
+        assert _parse_scope("/") == ["/"]
+
+    def test_empty(self):
+        assert _parse_scope("") == ["/"]
+
+    def test_single_path(self):
+        assert _parse_scope("/1 - Work/") == ["/1 - Work"]
+
+    def test_json_list(self):
+        result = _parse_scope('["/1 - Work/", "/2 - Home/"]')
+        assert result == ["/1 - Work", "/2 - Home"]
+
+    def test_json_single(self):
+        result = _parse_scope('["/1 - Work/"]')
+        assert result == ["/1 - Work"]
+
+
+class TestPathMatchesScope:
+    def test_root_matches_all(self):
+        assert _path_matches_scope("/anything/here", ["/"])
+
+    def test_exact_match(self):
+        assert _path_matches_scope("/1 - Work/notes", ["/1 - Work"])
+
+    def test_no_match(self):
+        assert not _path_matches_scope("/2 - Home/journal", ["/1 - Work"])
+
+    def test_multi_scope(self):
+        assert _path_matches_scope(
+            "/2 - Home/journal", ["/1 - Work", "/2 - Home"]
+        )
+
+
+class TestTimeWindowDays:
+    def test_values(self):
+        assert TIME_WINDOW_DAYS["1d"] == 1
+        assert TIME_WINDOW_DAYS["7d"] == 7
+        assert TIME_WINDOW_DAYS["30d"] == 30
+        assert TIME_WINDOW_DAYS["all"] is None

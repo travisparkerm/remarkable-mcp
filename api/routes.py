@@ -1,9 +1,10 @@
 """
-API routes for episodes, reMarkable device management, settings, and generation.
+API routes for shows, episodes, reMarkable device management, settings, and generation.
 All routes require authentication.
 """
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -16,8 +17,10 @@ from api.auth import get_current_user
 from api.database import (
     Episode,
     RemarkableDevice,
+    Show,
     User,
     UserSettings,
+    _slugify,
     async_session,
 )
 
@@ -26,6 +29,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["api"])
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+# In-memory cache for reMarkable library per user (user_id -> (timestamp, items))
+_library_cache: dict[int, tuple[float, list[dict]]] = {}
+LIBRARY_CACHE_TTL = 300  # 5 minutes
 
 
 # --- Pydantic models ---
@@ -37,6 +44,29 @@ class RegisterDeviceRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     date: str  # YYYY-MM-DD
+
+
+class ShowCreate(BaseModel):
+    name: str
+    scope: str = "/"  # JSON list of paths or single path
+    time_window: str = "7d"  # 1d, 7d, 30d, all
+    character: str = "analyst"
+    cadence: str = "on-demand"  # daily, weekly, monthly, on-demand
+    schedule: str | None = None
+    voice_id: str | None = None
+    target_word_count: int = 350
+
+
+class ShowUpdate(BaseModel):
+    name: str | None = None
+    scope: str | None = None
+    time_window: str | None = None
+    character: str | None = None
+    cadence: str | None = None
+    schedule: str | None = None
+    voice_id: str | None = None
+    target_word_count: int | None = None
+    is_active: bool | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -58,22 +88,199 @@ async def list_personalities():
     return list_personalities()
 
 
+# --- Shows ---
+
+
+@router.get("/shows")
+async def list_shows(user: User = Depends(get_current_user)):
+    """List all shows for the current user."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(Show)
+            .where(Show.user_id == user.id)
+            .order_by(Show.created_at.desc())
+        )
+        shows = result.scalars().all()
+        return [
+            {
+                "id": s.id,
+                "name": s.name,
+                "slug": s.slug,
+                "scope": s.scope,
+                "time_window": s.time_window,
+                "character": s.character,
+                "cadence": s.cadence,
+                "schedule": s.schedule,
+                "voice_id": s.voice_id,
+                "target_word_count": s.target_word_count,
+                "is_active": s.is_active,
+                "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in shows
+        ]
+
+
+@router.post("/shows")
+async def create_show(body: ShowCreate, user: User = Depends(get_current_user)):
+    """Create a new show."""
+    slug = _slugify(body.name)
+    if not slug:
+        raise HTTPException(status_code=400, detail="Invalid show name")
+
+    async with async_session() as db:
+        # Check for duplicate slug
+        result = await db.execute(
+            select(Show).where(Show.user_id == user.id, Show.slug == slug)
+        )
+        if result.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="A show with this name already exists")
+
+        show = Show(
+            user_id=user.id,
+            name=body.name,
+            slug=slug,
+            scope=body.scope,
+            time_window=body.time_window,
+            character=body.character,
+            cadence=body.cadence,
+            schedule=body.schedule,
+            voice_id=body.voice_id,
+            target_word_count=body.target_word_count,
+        )
+        db.add(show)
+        await db.commit()
+        await db.refresh(show)
+
+        return {
+            "id": show.id,
+            "name": show.name,
+            "slug": show.slug,
+            "scope": show.scope,
+            "time_window": show.time_window,
+            "character": show.character,
+            "cadence": show.cadence,
+            "schedule": show.schedule,
+            "voice_id": show.voice_id,
+            "target_word_count": show.target_word_count,
+            "is_active": show.is_active,
+        }
+
+
+@router.get("/shows/{show_id}")
+async def get_show(show_id: int, user: User = Depends(get_current_user)):
+    """Get a specific show."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(Show).where(Show.id == show_id, Show.user_id == user.id)
+        )
+        show = result.scalar_one_or_none()
+        if not show:
+            raise HTTPException(status_code=404, detail="Show not found")
+
+        return {
+            "id": show.id,
+            "name": show.name,
+            "slug": show.slug,
+            "scope": show.scope,
+            "time_window": show.time_window,
+            "character": show.character,
+            "cadence": show.cadence,
+            "schedule": show.schedule,
+            "voice_id": show.voice_id,
+            "target_word_count": show.target_word_count,
+            "is_active": show.is_active,
+            "last_run_at": show.last_run_at.isoformat() if show.last_run_at else None,
+            "created_at": show.created_at.isoformat() if show.created_at else None,
+        }
+
+
+@router.put("/shows/{show_id}")
+async def update_show(
+    show_id: int, body: ShowUpdate, user: User = Depends(get_current_user)
+):
+    """Update a show."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(Show).where(Show.id == show_id, Show.user_id == user.id)
+        )
+        show = result.scalar_one_or_none()
+        if not show:
+            raise HTTPException(status_code=404, detail="Show not found")
+
+        if body.name is not None:
+            show.name = body.name
+            show.slug = _slugify(body.name)
+        if body.scope is not None:
+            show.scope = body.scope
+        if body.time_window is not None:
+            show.time_window = body.time_window
+        if body.character is not None:
+            show.character = body.character
+        if body.cadence is not None:
+            show.cadence = body.cadence
+        if body.schedule is not None:
+            show.schedule = body.schedule
+        if body.voice_id is not None:
+            show.voice_id = body.voice_id
+        if body.target_word_count is not None:
+            show.target_word_count = body.target_word_count
+        if body.is_active is not None:
+            show.is_active = body.is_active
+
+        await db.commit()
+        return {"status": "ok"}
+
+
+@router.delete("/shows/{show_id}")
+async def delete_show(show_id: int, user: User = Depends(get_current_user)):
+    """Delete a show and all its episodes."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(Show).where(Show.id == show_id, Show.user_id == user.id)
+        )
+        show = result.scalar_one_or_none()
+        if not show:
+            raise HTTPException(status_code=404, detail="Show not found")
+
+        # Delete episode files
+        ep_result = await db.execute(
+            select(Episode).where(Episode.show_id == show_id)
+        )
+        for ep in ep_result.scalars().all():
+            if ep.audio_path:
+                audio_file = Path(ep.audio_path)
+                if audio_file.exists():
+                    audio_file.unlink()
+            await db.delete(ep)
+
+        await db.delete(show)
+        await db.commit()
+
+    return {"status": "ok"}
+
+
 # --- Episodes ---
 
 
 @router.get("/episodes")
-async def list_episodes(user: User = Depends(get_current_user)):
-    """List all episodes for the current user, newest first."""
+async def list_episodes(
+    user: User = Depends(get_current_user),
+    show_id: int | None = None,
+):
+    """List episodes, optionally filtered by show."""
     async with async_session() as db:
-        result = await db.execute(
-            select(Episode)
-            .where(Episode.user_id == user.id)
-            .order_by(Episode.date.desc())
-        )
+        query = select(Episode).where(Episode.user_id == user.id)
+        if show_id is not None:
+            query = query.where(Episode.show_id == show_id)
+        query = query.order_by(Episode.created_at.desc())
+
+        result = await db.execute(query)
         episodes = result.scalars().all()
         return [
             {
                 "id": ep.id,
+                "show_id": ep.show_id,
                 "date": ep.date,
                 "title": ep.title,
                 "status": ep.status,
@@ -83,19 +290,20 @@ async def list_episodes(user: User = Depends(get_current_user)):
         ]
 
 
-@router.get("/episodes/{date}")
-async def get_episode(date: str, user: User = Depends(get_current_user)):
-    """Get a specific episode by date, including script text."""
+@router.get("/episodes/{episode_id}")
+async def get_episode(episode_id: int, user: User = Depends(get_current_user)):
+    """Get a specific episode by ID."""
     async with async_session() as db:
         result = await db.execute(
             select(Episode)
-            .where(Episode.user_id == user.id, Episode.date == date)
+            .where(Episode.id == episode_id, Episode.user_id == user.id)
         )
         ep = result.scalar_one_or_none()
         if ep is None:
             raise HTTPException(status_code=404, detail="Episode not found")
         return {
             "id": ep.id,
+            "show_id": ep.show_id,
             "date": ep.date,
             "title": ep.title,
             "script_text": ep.script_text,
@@ -106,13 +314,13 @@ async def get_episode(date: str, user: User = Depends(get_current_user)):
         }
 
 
-@router.get("/episodes/{date}/audio")
-async def stream_audio(date: str, user: User = Depends(get_current_user)):
+@router.get("/episodes/{episode_id}/audio")
+async def stream_audio(episode_id: int, user: User = Depends(get_current_user)):
     """Stream the MP3 file for an episode."""
     async with async_session() as db:
         result = await db.execute(
             select(Episode)
-            .where(Episode.user_id == user.id, Episode.date == date)
+            .where(Episode.id == episode_id, Episode.user_id == user.id)
         )
         ep = result.scalar_one_or_none()
         if ep is None:
@@ -127,34 +335,26 @@ async def stream_audio(date: str, user: User = Depends(get_current_user)):
     return FileResponse(
         audio_file,
         media_type="audio/mpeg",
-        filename=f"episode-{date}.mp3",
+        filename=f"episode-{ep.date}.mp3",
     )
 
 
-@router.delete("/episodes/{date}")
-async def delete_episode(date: str, user: User = Depends(get_current_user)):
+@router.delete("/episodes/{episode_id}")
+async def delete_episode(episode_id: int, user: User = Depends(get_current_user)):
     """Delete an episode and its associated files."""
     async with async_session() as db:
         result = await db.execute(
             select(Episode)
-            .where(Episode.user_id == user.id, Episode.date == date)
+            .where(Episode.id == episode_id, Episode.user_id == user.id)
         )
         ep = result.scalar_one_or_none()
         if ep is None:
             raise HTTPException(status_code=404, detail="Episode not found")
 
-        # Delete audio file if it exists
         if ep.audio_path:
             audio_file = Path(ep.audio_path)
             if audio_file.exists():
                 audio_file.unlink()
-
-        # Delete notes and script files
-        user_dir = DATA_DIR / "episodes" / str(user.id)
-        for prefix in ("notes", "script"):
-            f = user_dir / f"{prefix}-{date}.txt"
-            if f.exists():
-                f.unlink()
 
         await db.delete(ep)
         await db.commit()
@@ -215,61 +415,87 @@ async def remarkable_status(user: User = Depends(get_current_user)):
         }
 
 
+@router.get("/remarkable/library")
+async def remarkable_library(
+    user: User = Depends(get_current_user),
+    refresh: bool = False,
+):
+    """Browse the user's reMarkable library (folder/document tree).
+    Results are cached for 5 minutes. Pass ?refresh=true to force a fresh fetch.
+    """
+    import time
+
+    from daily_podcast.extract import browse_library
+
+    # Check cache first
+    if not refresh and user.id in _library_cache:
+        cached_at, cached_items = _library_cache[user.id]
+        if time.time() - cached_at < LIBRARY_CACHE_TTL:
+            return cached_items
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(RemarkableDevice)
+            .where(RemarkableDevice.user_id == user.id)
+            .order_by(RemarkableDevice.registered_at.desc())
+        )
+        device = result.scalar_one_or_none()
+        if not device:
+            raise HTTPException(status_code=400, detail="No reMarkable device connected")
+        device_token = device.device_token
+
+    try:
+        items = await asyncio.wait_for(
+            asyncio.to_thread(browse_library, device_token),
+            timeout=120,
+        )
+        # Cache the result
+        _library_cache[user.id] = (time.time(), items)
+        return items
+    except asyncio.TimeoutError:
+        logger.error("Browse library timed out for user %d", user.id)
+        raise HTTPException(status_code=504, detail="reMarkable Cloud took too long to respond. Try again.")
+    except Exception as e:
+        logger.exception("Failed to browse reMarkable library")
+        raise HTTPException(status_code=500, detail=f"Failed to browse library: {e}")
+
+
 # --- Generation ---
 
 
-@router.post("/generate")
-async def generate_episode(
-    body: GenerateRequest,
+@router.post("/shows/{show_id}/generate")
+async def generate_show_episode(
+    show_id: int,
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
 ):
-    """Trigger podcast generation for a specific date."""
-    from api.worker import run_pipeline_for_user
+    """Trigger episode generation for a specific show."""
+    from api.worker import run_pipeline_for_show
 
-    date = body.date
-
-    # Check if episode already exists and is processing/ready
     async with async_session() as db:
         result = await db.execute(
-            select(Episode)
-            .where(Episode.user_id == user.id, Episode.date == date)
+            select(Show).where(Show.id == show_id, Show.user_id == user.id)
         )
-        existing = result.scalar_one_or_none()
-        if existing and existing.status == "ready":
-            return {
-                "status": existing.status,
-                "message": "Episode is already ready",
-            }
+        show = result.scalar_one_or_none()
+        if not show:
+            raise HTTPException(status_code=404, detail="Show not found")
 
-        # Create or reset episode record
-        if existing:
-            # Clean up old files before regenerating
-            if existing.audio_path:
-                old_audio = Path(existing.audio_path)
-                if old_audio.exists():
-                    old_audio.unlink()
-            user_dir = DATA_DIR / "episodes" / str(user.id)
-            for prefix in ("notes", "script"):
-                f = user_dir / f"{prefix}-{date}.txt"
-                if f.exists():
-                    f.unlink()
+        # Create episode record
+        from datetime import datetime, timezone
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        episode = Episode(
+            user_id=user.id,
+            show_id=show.id,
+            date=date_str,
+            status="pending",
+            title=f"{show.name} — {date_str}",
+        )
+        db.add(episode)
+        await db.commit()
+        await db.refresh(episode)
+        episode_id = episode.id
 
-            existing.status = "pending"
-            existing.script_text = None
-            existing.notes_text = None
-            existing.audio_path = None
-            existing.title = None
-            await db.commit()
-            episode_id = existing.id
-        else:
-            episode = Episode(user_id=user.id, date=date, status="pending")
-            db.add(episode)
-            await db.commit()
-            episode_id = episode.id
-
-    # Run pipeline in background
-    background_tasks.add_task(run_pipeline_for_user, user.id, date)
+    background_tasks.add_task(run_pipeline_for_show, show_id, episode_id)
 
     return {"status": "pending", "episode_id": episode_id}
 
@@ -286,7 +512,6 @@ async def get_settings(user: User = Depends(get_current_user)):
         )
         settings = result.scalar_one_or_none()
         if settings is None:
-            # Create default settings
             settings = UserSettings(user_id=user.id)
             db.add(settings)
             await db.commit()

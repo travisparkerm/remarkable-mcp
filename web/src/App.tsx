@@ -1,10 +1,13 @@
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { getMe, setToken, clearToken, type User } from "./lib/api";
+import { getMe, setToken, clearToken, getRemarkableStatus, getRemarkableLibrary, type User } from "./lib/api";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Player from "./pages/Player";
 import Settings from "./pages/Settings";
+import Shows from "./pages/Shows";
+import ShowDetail from "./pages/ShowDetail";
+import ShowEditor from "./pages/ShowEditor";
 
 function ProtectedRoute({
   user,
@@ -35,7 +38,13 @@ export default function App() {
     }
 
     getMe()
-      .then(setUser)
+      .then((u) => {
+        setUser(u);
+        // Prefetch reMarkable library in the background to warm the server cache
+        getRemarkableStatus()
+          .then((s) => { if (s.connected) getRemarkableLibrary(); })
+          .catch(() => {}); // ignore prefetch errors
+      })
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
   }, []);
@@ -66,7 +75,39 @@ export default function App() {
         }
       />
       <Route
-        path="/episode/:date"
+        path="/shows"
+        element={
+          <ProtectedRoute user={user}>
+            <Shows user={user!} />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/shows/new"
+        element={
+          <ProtectedRoute user={user}>
+            <ShowEditor />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/shows/:showId/edit"
+        element={
+          <ProtectedRoute user={user}>
+            <ShowEditor />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/shows/:showId"
+        element={
+          <ProtectedRoute user={user}>
+            <ShowDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/episode/:episodeId"
         element={
           <ProtectedRoute user={user}>
             <Player />

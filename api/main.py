@@ -4,6 +4,8 @@ FastAPI application entry point.
 Run with: uvicorn api.main:app --reload
 """
 
+import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,12 +19,30 @@ from api.auth import APP_SECRET_KEY, router as auth_router
 from api.database import init_db
 from api.routes import router as api_router
 
+logger = logging.getLogger(__name__)
+
+SCHEDULER_INTERVAL = 300  # Check scheduled shows every 5 minutes
+
+
+async def _scheduler_loop():
+    """Background loop that checks for due scheduled shows."""
+    from api.worker import check_scheduled_shows
+
+    while True:
+        try:
+            await check_scheduled_shows()
+        except Exception:
+            logger.exception("Scheduler loop error")
+        await asyncio.sleep(SCHEDULER_INTERVAL)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle."""
     await init_db()
+    scheduler_task = asyncio.create_task(_scheduler_loop())
     yield
+    scheduler_task.cancel()
 
 
 app = FastAPI(title="Remarkable Podcast", lifespan=lifespan)

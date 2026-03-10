@@ -1,94 +1,96 @@
 """
-Background worker that runs the podcast pipeline for a specific user.
+Background worker that runs the podcast pipeline for shows.
 """
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from api.database import Episode, RemarkableDevice, UserSettings, async_session
+from api.database import Episode, RemarkableDevice, Show, UserSettings, async_session
+from daily_podcast.extract import TIME_WINDOW_DAYS
 
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
-async def run_pipeline_for_user(user_id: int, date_str: str):
+async def run_pipeline_for_show(show_id: int, episode_id: int):
     """
-    Run the full podcast pipeline for a user and date.
+    Run the full podcast pipeline for a show's episode.
 
-    Loads the user's reMarkable token and settings from the database,
-    configures the pipeline, runs extract -> summarize -> speak,
-    and stores results in data/episodes/{user_id}/.
+    Loads the show config, user's reMarkable token and settings,
+    runs extract -> summarize -> speak, and updates the episode record.
     """
     import asyncio
 
-    # Load user's device token and settings
+    # Load show, device token, and user settings
     async with async_session() as db:
-        # Get device token
+        show = await db.get(Show, show_id)
+        if not show:
+            logger.error("Show %d not found", show_id)
+            return
+
         result = await db.execute(
             select(RemarkableDevice)
-            .where(RemarkableDevice.user_id == user_id)
+            .where(RemarkableDevice.user_id == show.user_id)
             .order_by(RemarkableDevice.registered_at.desc())
         )
         device = result.scalar_one_or_none()
         if device is None:
-            await _fail_episode(db, user_id, date_str, "No reMarkable device registered")
+            await _fail_episode(db, episode_id, "No reMarkable device registered")
             return
 
-        # Get user settings
         result = await db.execute(
-            select(UserSettings).where(UserSettings.user_id == user_id)
+            select(UserSettings).where(UserSettings.user_id == show.user_id)
         )
         settings = result.scalar_one_or_none()
 
         # Mark episode as processing
-        result = await db.execute(
-            select(Episode)
-            .where(Episode.user_id == user_id, Episode.date == date_str)
-        )
-        episode = result.scalar_one_or_none()
+        episode = await db.get(Episode, episode_id)
         if episode:
             episode.status = "processing"
             await db.commit()
 
         device_token = device.device_token
         tz = settings.timezone if settings else "Europe/Warsaw"
-        voice_id = settings.elevenlabs_voice_id if settings else None
-        voice_desc = settings.podcast_voice_description if settings else None
-        target_words = settings.target_word_count if settings else 350
-        personality = settings.personality if settings else "analyst"
+        user_id = show.user_id
 
-    # Run the CPU/IO-bound pipeline in a thread
+        # Show-level config
+        show_config = {
+            "name": show.name,
+            "slug": show.slug,
+            "scope": show.scope,
+            "time_window": show.time_window,
+            "character": show.character,
+            "voice_id": show.voice_id,
+            "target_word_count": show.target_word_count,
+        }
+
+        # Fall back to user settings for voice_id if show doesn't have one
+        if not show_config["voice_id"] and settings:
+            show_config["voice_id"] = settings.elevenlabs_voice_id
+
     try:
         result = await asyncio.to_thread(
-            _run_pipeline_sync,
+            _run_show_pipeline_sync,
             user_id,
-            date_str,
             device_token,
             tz,
-            voice_id,
-            voice_desc,
-            target_words,
-            personality,
+            show_config,
         )
     except Exception as e:
-        logger.exception("Pipeline failed for user %d, date %s", user_id, date_str)
+        logger.exception("Pipeline failed for show %d, episode %d", show_id, episode_id)
         async with async_session() as db:
-            await _fail_episode(db, user_id, date_str, str(e))
+            await _fail_episode(db, episode_id, str(e))
         return
 
-    # Update episode in DB
+    # Update episode and show in DB
     async with async_session() as db:
-        res = await db.execute(
-            select(Episode)
-            .where(Episode.user_id == user_id, Episode.date == date_str)
-        )
-        episode = res.scalar_one_or_none()
+        episode = await db.get(Episode, episode_id)
         if episode:
             episode.status = result["status"]
             episode.title = result.get("title")
@@ -97,66 +99,74 @@ async def run_pipeline_for_user(user_id: int, date_str: str):
             episode.audio_path = result.get("audio_path")
             await db.commit()
 
+        show = await db.get(Show, show_id)
+        if show:
+            show.last_run_at = datetime.now(timezone.utc)
+            await db.commit()
 
-def _run_pipeline_sync(
+
+def _run_show_pipeline_sync(
     user_id: int,
-    date_str: str,
     device_token: str,
     timezone_str: str,
-    voice_id: str | None,
-    voice_desc: str | None,
-    target_words: int,
-    personality: str = "analyst",
+    show_config: dict,
 ) -> dict:
     """
-    Synchronous pipeline execution. Runs in a thread.
+    Synchronous pipeline execution for a show. Runs in a thread.
     Returns a dict with episode data.
     """
-    from daily_podcast.config import PodcastConfig, load_config
-    from daily_podcast.extract import extract_notes
-    from daily_podcast.personalities import get_voice_id
+    from daily_podcast.config import load_config
+    from daily_podcast.extract import TIME_WINDOW_DAYS, extract_notes
+    from daily_podcast.personalities import get_system_prompt, get_voice_id
     from daily_podcast.speak import generate_audio
     from daily_podcast.summarize import generate_podcast_script
 
-    # Build config from env-based defaults
     config = load_config()
 
-    # Override with the user's device token AFTER load_config
-    # (load_config loads .env.local which may have a stale REMARKABLE_TOKEN)
+    # Override with user's device token
     rmapi_file = Path.home() / ".rmapi"
     rmapi_file.write_text(device_token)
     os.environ["REMARKABLE_TOKEN"] = device_token
     config.remarkable_token = device_token
     config.timezone = timezone_str
-    config.episodes_dir = DATA_DIR / "episodes" / str(user_id)
-    config.remarkable_token = device_token
 
-    # Use user's custom voice ID, or fall back to the personality's default
-    if voice_id:
-        config.elevenlabs_voice_id = voice_id
-    elif personality:
-        personality_voice = get_voice_id(personality)
-        if personality_voice:
-            config.elevenlabs_voice_id = personality_voice
-    if voice_desc:
-        config.podcast_voice = voice_desc
-    if target_words:
-        config.podcast_target_length = target_words
-
+    show_slug = show_config["slug"]
+    config.episodes_dir = DATA_DIR / "episodes" / str(user_id) / show_slug
     config.episodes_dir.mkdir(parents=True, exist_ok=True)
 
+    # Voice: show-level > personality default
+    voice_id = show_config.get("voice_id")
+    character = show_config.get("character", "analyst")
+    if voice_id:
+        config.elevenlabs_voice_id = voice_id
+    else:
+        personality_voice = get_voice_id(character)
+        if personality_voice:
+            config.elevenlabs_voice_id = personality_voice
+
+    target_words = show_config.get("target_word_count", 350)
+    config.podcast_target_length = target_words
+
     tz = ZoneInfo(timezone_str)
-    target_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=tz)
+    now = datetime.now(tz)
+    date_str = now.strftime("%Y-%m-%d")
+
+    # Determine days from time_window
+    time_window = show_config.get("time_window", "7d")
+    days = TIME_WINDOW_DAYS.get(time_window, 7)
+
+    scope = show_config.get("scope", "/")
 
     # Step 1: Extract notes
-    logger.info("User %d: extracting notes for %s", user_id, date_str)
-    notes_text = extract_notes(config, target_date)
+    logger.info("Show '%s': extracting notes (window=%s, scope=%s)",
+                show_config["name"], time_window, scope)
+    notes_text = extract_notes(config, now, days=days, scope=scope)
     if not notes_text:
         return {
             "status": "failed",
-            "title": f"No notes for {date_str}",
+            "title": f"{show_config['name']} — No notes found",
             "notes_text": "",
-            "script_text": "Error: No notes were found for this date.",
+            "script_text": "No notes were found for this show's scope and time window.",
         }
 
     # Save raw notes
@@ -164,35 +174,106 @@ def _run_pipeline_sync(
     notes_path.write_text(notes_text)
 
     # Step 2: Generate script
-    logger.info("User %d: generating script for %s", user_id, date_str)
-    script = generate_podcast_script(notes_text, config, personality=personality)
+    logger.info("Show '%s': generating script (character=%s)", show_config["name"], character)
+    script = generate_podcast_script(notes_text, config, personality=character)
 
     script_path = config.episodes_dir / f"script-{date_str}.txt"
     script_path.write_text(script)
 
     # Step 3: Generate audio
-    logger.info("User %d: generating audio for %s", user_id, date_str)
-    mp3_path = config.episodes_dir / f"episode-{date_str}.mp3"
+    logger.info("Show '%s': generating audio", show_config["name"])
+    mp3_path = config.episodes_dir / f"{show_slug}-{date_str}.mp3"
     generate_audio(script, mp3_path, config)
 
     return {
         "status": "ready",
-        "title": f"Episode for {date_str}",
+        "title": f"{show_config['name']} — {date_str}",
         "script_text": script,
         "notes_text": notes_text,
         "audio_path": str(mp3_path),
     }
 
 
-async def _fail_episode(db, user_id: int, date_str: str, error: str):
+async def _fail_episode(db, episode_id: int, error: str):
     """Mark an episode as failed."""
-    result = await db.execute(
-        select(Episode)
-        .where(Episode.user_id == user_id, Episode.date == date_str)
-    )
-    episode = result.scalar_one_or_none()
+    episode = await db.get(Episode, episode_id)
     if episode:
         episode.status = "failed"
         episode.script_text = f"Error: {error}"
         await db.commit()
-    logger.error("Episode failed for user %d, date %s: %s", user_id, date_str, error)
+    logger.error("Episode %d failed: %s", episode_id, error)
+
+
+# --- Scheduler ---
+
+
+async def check_scheduled_shows():
+    """
+    Check all active scheduled shows and generate episodes for any that are due.
+    Called periodically by the background scheduler.
+    """
+    from datetime import timedelta
+
+    now_utc = datetime.now(timezone.utc)
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(Show).where(
+                Show.is_active == True,
+                Show.cadence != "on-demand",
+            )
+        )
+        shows = result.scalars().all()
+
+    for show in shows:
+        try:
+            if _is_show_due(show, now_utc):
+                logger.info("Scheduler: show '%s' (id=%d) is due, generating episode",
+                            show.name, show.id)
+                async with async_session() as db:
+                    date_str = now_utc.strftime("%Y-%m-%d")
+                    episode = Episode(
+                        user_id=show.user_id,
+                        show_id=show.id,
+                        date=date_str,
+                        status="pending",
+                        title=f"{show.name} — {date_str}",
+                    )
+                    db.add(episode)
+                    await db.commit()
+                    await db.refresh(episode)
+                    episode_id = episode.id
+
+                await run_pipeline_for_show(show.id, episode_id)
+        except Exception:
+            logger.exception("Scheduler error for show %d (%s)", show.id, show.name)
+
+
+def _is_show_due(show: Show, now_utc: datetime) -> bool:
+    """Check if a scheduled show is due to run."""
+    from datetime import timedelta
+
+    cadence = show.cadence
+    last_run = show.last_run_at
+
+    if cadence == "on-demand":
+        return False
+
+    # If never run, it's due
+    if last_run is None:
+        return True
+
+    # Ensure last_run is tz-aware
+    if last_run.tzinfo is None:
+        last_run = last_run.replace(tzinfo=timezone.utc)
+
+    elapsed = now_utc - last_run
+
+    if cadence == "daily":
+        return elapsed >= timedelta(hours=20)  # ~daily with margin
+    elif cadence == "weekly":
+        return elapsed >= timedelta(days=6, hours=20)
+    elif cadence == "monthly":
+        return elapsed >= timedelta(days=28)
+
+    return False
