@@ -259,24 +259,35 @@ export default function Player() {
             </h1>
             <p className="mt-1 text-sm text-neutral-500">{episode.date}</p>
           </div>
-          <button
-            onClick={async () => {
-              if (id === null || deleting) return;
-              if (!confirm("Delete this episode? You can regenerate it afterwards.")) return;
-              setDeleting(true);
-              try {
-                await deleteEpisode(id);
-                navigate("/");
-              } catch (err: unknown) {
-                setError(err instanceof Error ? err.message : "Delete failed");
-                setDeleting(false);
-              }
-            }}
-            disabled={deleting}
-            className="rounded-lg border border-neutral-800 px-3 py-1.5 text-xs text-neutral-400 transition hover:border-red-900 hover:text-red-400 disabled:opacity-50"
-          >
-            {deleting ? "Deleting..." : "Delete"}
-          </button>
+          <div className="flex items-center gap-2">
+            {episode.status === "ready" && id !== null && (
+              <a
+                href={getAudioUrl(id)}
+                download={`${episode.title || episode.date}.mp3`}
+                className="rounded-lg border border-neutral-800 px-3 py-1.5 text-xs text-neutral-400 transition hover:border-neutral-700 hover:text-neutral-200"
+              >
+                Download
+              </a>
+            )}
+            <button
+              onClick={async () => {
+                if (id === null || deleting) return;
+                if (!confirm("Delete this episode? You can regenerate it afterwards.")) return;
+                setDeleting(true);
+                try {
+                  await deleteEpisode(id);
+                  navigate("/");
+                } catch (err: unknown) {
+                  setError(err instanceof Error ? err.message : "Delete failed");
+                  setDeleting(false);
+                }
+              }}
+              disabled={deleting}
+              className="rounded-lg border border-neutral-800 px-3 py-1.5 text-xs text-neutral-400 transition hover:border-red-900 hover:text-red-400 disabled:opacity-50"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </button>
+          </div>
         </div>
 
         {/* Status / Audio player */}
