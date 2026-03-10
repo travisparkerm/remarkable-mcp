@@ -177,7 +177,7 @@ def _run_show_pipeline_sync(
 
     # Step 2: Generate script
     logger.info("Show '%s': generating script (character=%s)", show_config["name"], character)
-    script = generate_podcast_script(notes_text, config, personality=character)
+    title, script = generate_podcast_script(notes_text, config, personality=character)
 
     script_path = config.episodes_dir / f"script-{date_str}.txt"
     script_path.write_text(script)
@@ -189,7 +189,7 @@ def _run_show_pipeline_sync(
 
     return {
         "status": "ready",
-        "title": f"{show_config['name']} — {date_str}",
+        "title": title,
         "script_text": script,
         "notes_text": notes_text,
         "audio_path": str(mp3_path),

@@ -62,7 +62,7 @@ def run_pipeline(
 
     # Step 2: Generate podcast script
     logger.info("=== Step 2: Generating podcast script ===")
-    script = generate_podcast_script(notes_text, config)
+    _title, script = generate_podcast_script(notes_text, config)
 
     # Save script for reference and feed description
     script_path = episodes_dir / f"script-{date_str}.txt"
