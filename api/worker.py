@@ -19,6 +19,23 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
+async def create_episode_for_show(show: Show) -> int:
+    """Create a pending episode record for a show. Returns the episode ID."""
+    async with async_session() as db:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        episode = Episode(
+            user_id=show.user_id,
+            show_id=show.id,
+            date=date_str,
+            status="pending",
+            title=f"{show.name} — {date_str}",
+        )
+        db.add(episode)
+        await db.commit()
+        await db.refresh(episode)
+        return episode.id
+
+
 async def run_pipeline_for_show(show_id: int, episode_id: int):
     """
     Run the full podcast pipeline for a show's episode.
@@ -335,20 +352,7 @@ async def check_scheduled_shows():
             if _is_show_due(show, now_utc):
                 logger.info("Scheduler: show '%s' (id=%d) is due, generating episode",
                             show.name, show.id)
-                async with async_session() as db:
-                    date_str = now_utc.strftime("%Y-%m-%d")
-                    episode = Episode(
-                        user_id=show.user_id,
-                        show_id=show.id,
-                        date=date_str,
-                        status="pending",
-                        title=f"{show.name} — {date_str}",
-                    )
-                    db.add(episode)
-                    await db.commit()
-                    await db.refresh(episode)
-                    episode_id = episode.id
-
+                episode_id = await create_episode_for_show(show)
                 await run_pipeline_for_show(show.id, episode_id)
         except Exception:
             logger.exception("Scheduler error for show %d (%s)", show.id, show.name)

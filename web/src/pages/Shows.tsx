@@ -6,34 +6,7 @@ import {
   type Show,
   type User,
 } from "../lib/api";
-
-const CHARACTER_LABELS: Record<string, string> = {
-  logbook: "The Logbook",
-  analyst: "The Analyst",
-  coach: "The Coach",
-  connector: "The Connector",
-  creative: "The Creative",
-  editor: "The Editor",
-};
-
-const TIME_WINDOW_LABELS: Record<string, string> = {
-  "1d": "Last day",
-  "7d": "Last week",
-  "30d": "Last month",
-  all: "All time",
-};
-
-const CADENCE_LABELS: Record<string, string> = {
-  daily: "Daily",
-  weekly: "Weekly",
-  monthly: "Monthly",
-  "on-demand": "On-demand",
-};
-
-const SOURCE_TYPE_LABELS: Record<string, string> = {
-  remarkable: "reMarkable",
-  photo_library: "Photo Library",
-};
+import { CHARACTER_LABELS, TIME_WINDOW_LABELS, CADENCE_LABELS, SOURCE_TYPE_LABELS } from "../lib/constants";
 
 interface Props {
   user: User;

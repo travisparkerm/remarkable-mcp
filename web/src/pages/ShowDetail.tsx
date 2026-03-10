@@ -7,45 +7,8 @@ import {
   type Show,
   type Episode,
 } from "../lib/api";
-
-const CHARACTER_LABELS: Record<string, string> = {
-  logbook: "The Logbook",
-  analyst: "The Analyst",
-  coach: "The Coach",
-  connector: "The Connector",
-  creative: "The Creative",
-  editor: "The Editor",
-};
-
-const TIME_WINDOW_LABELS: Record<string, string> = {
-  "1d": "Last day",
-  "7d": "Last week",
-  "30d": "Last month",
-  all: "All time",
-};
-
-const SOURCE_TYPE_LABELS: Record<string, string> = {
-  remarkable: "reMarkable",
-  photo_library: "Photo Library",
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    ready: "bg-emerald-900/50 text-emerald-400",
-    generating: "bg-amber-900/50 text-amber-400",
-    processing: "bg-amber-900/50 text-amber-400",
-    pending: "bg-neutral-800 text-neutral-400",
-    failed: "bg-red-900/50 text-red-400",
-  };
-
-  return (
-    <span
-      className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${styles[status] ?? styles.pending}`}
-    >
-      {status}
-    </span>
-  );
-}
+import { CHARACTER_LABELS, TIME_WINDOW_LABELS, SOURCE_TYPE_LABELS } from "../lib/constants";
+import StatusBadge from "../components/StatusBadge";
 
 export default function ShowDetail() {
   const { showId } = useParams<{ showId: string }>();

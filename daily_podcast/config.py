@@ -23,10 +23,15 @@ def _env(key: str, default: str = "") -> str:
     return val
 
 
-def load_config() -> "PodcastConfig":
-    """Load configuration from environment variables and .env / .env.local file."""
+def load_env():
+    """Load .env files in priority order (.env.local overrides .env)."""
     load_dotenv(".env.local")
     load_dotenv(".env")
+
+
+def load_config() -> "PodcastConfig":
+    """Load configuration from environment variables and .env / .env.local file."""
+    load_env()
     return PodcastConfig(
         remarkable_token=_env("REMARKABLE_TOKEN"),
         google_vision_api_key=_env("GOOGLE_VISION_API_KEY"),

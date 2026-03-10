@@ -7,47 +7,12 @@ import {
   type Show,
   type User,
 } from "../lib/api";
+import { CHARACTER_LABELS } from "../lib/constants";
+import StatusBadge from "../components/StatusBadge";
 
 interface Props {
   user: User;
   onLogout: () => void;
-}
-
-const CHARACTER_LABELS: Record<string, string> = {
-  logbook: "The Logbook",
-  analyst: "The Analyst",
-  coach: "The Coach",
-  connector: "The Connector",
-  creative: "The Creative",
-  editor: "The Editor",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  extracting: "extracting",
-  summarizing: "writing script",
-  generating_audio: "generating audio",
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    ready: "bg-emerald-900/50 text-emerald-400",
-    generating: "bg-amber-900/50 text-amber-400",
-    processing: "bg-amber-900/50 text-amber-400",
-    extracting: "bg-amber-900/50 text-amber-400",
-    summarizing: "bg-amber-900/50 text-amber-400",
-    generating_audio: "bg-amber-900/50 text-amber-400",
-    error: "bg-red-900/50 text-red-400",
-    failed: "bg-red-900/50 text-red-400",
-    pending: "bg-neutral-800 text-neutral-400",
-  };
-
-  return (
-    <span
-      className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${styles[status] ?? styles.pending}`}
-    >
-      {STATUS_LABELS[status] ?? status}
-    </span>
-  );
 }
 
 export default function Dashboard({ user, onLogout }: Props) {

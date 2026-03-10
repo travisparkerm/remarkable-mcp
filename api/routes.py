@@ -35,6 +35,47 @@ _library_cache: dict[int, tuple[float, list[dict]]] = {}
 LIBRARY_CACHE_TTL = 300  # 5 minutes
 
 
+# --- Serialization helpers ---
+
+
+def _serialize_show(s: Show) -> dict:
+    """Convert Show ORM object to API response dict."""
+    return {
+        "id": s.id,
+        "name": s.name,
+        "slug": s.slug,
+        "source_type": s.source_type,
+        "source_config": s.source_config,
+        "scope": s.scope,
+        "time_window": s.time_window,
+        "character": s.character,
+        "cadence": s.cadence,
+        "schedule": s.schedule,
+        "voice_id": s.voice_id,
+        "target_word_count": s.target_word_count,
+        "is_active": s.is_active,
+        "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    }
+
+
+def _serialize_episode(ep: Episode, include_text: bool = False) -> dict:
+    """Convert Episode ORM object to API response dict."""
+    d = {
+        "id": ep.id,
+        "show_id": ep.show_id,
+        "date": ep.date,
+        "title": ep.title,
+        "status": ep.status,
+        "created_at": ep.created_at.isoformat() if ep.created_at else None,
+    }
+    if include_text:
+        d["script_text"] = ep.script_text
+        d["notes_text"] = ep.notes_text
+        d["audio_path"] = ep.audio_path
+    return d
+
+
 # --- Pydantic models ---
 
 
@@ -105,26 +146,7 @@ async def list_shows(user: User = Depends(get_current_user)):
             .order_by(Show.created_at.desc())
         )
         shows = result.scalars().all()
-        return [
-            {
-                "id": s.id,
-                "name": s.name,
-                "slug": s.slug,
-                "source_type": s.source_type,
-                "source_config": s.source_config,
-                "scope": s.scope,
-                "time_window": s.time_window,
-                "character": s.character,
-                "cadence": s.cadence,
-                "schedule": s.schedule,
-                "voice_id": s.voice_id,
-                "target_word_count": s.target_word_count,
-                "is_active": s.is_active,
-                "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
-            }
-            for s in shows
-        ]
+        return [_serialize_show(s) for s in shows]
 
 
 @router.post("/shows")
@@ -160,21 +182,7 @@ async def create_show(body: ShowCreate, user: User = Depends(get_current_user)):
         await db.commit()
         await db.refresh(show)
 
-        return {
-            "id": show.id,
-            "name": show.name,
-            "slug": show.slug,
-            "source_type": show.source_type,
-            "source_config": show.source_config,
-            "scope": show.scope,
-            "time_window": show.time_window,
-            "character": show.character,
-            "cadence": show.cadence,
-            "schedule": show.schedule,
-            "voice_id": show.voice_id,
-            "target_word_count": show.target_word_count,
-            "is_active": show.is_active,
-        }
+        return _serialize_show(show)
 
 
 @router.get("/shows/{show_id}")
@@ -188,23 +196,7 @@ async def get_show(show_id: int, user: User = Depends(get_current_user)):
         if not show:
             raise HTTPException(status_code=404, detail="Show not found")
 
-        return {
-            "id": show.id,
-            "name": show.name,
-            "slug": show.slug,
-            "source_type": show.source_type,
-            "source_config": show.source_config,
-            "scope": show.scope,
-            "time_window": show.time_window,
-            "character": show.character,
-            "cadence": show.cadence,
-            "schedule": show.schedule,
-            "voice_id": show.voice_id,
-            "target_word_count": show.target_word_count,
-            "is_active": show.is_active,
-            "last_run_at": show.last_run_at.isoformat() if show.last_run_at else None,
-            "created_at": show.created_at.isoformat() if show.created_at else None,
-        }
+        return _serialize_show(show)
 
 
 @router.put("/shows/{show_id}")
@@ -293,17 +285,7 @@ async def list_episodes(
 
         result = await db.execute(query)
         episodes = result.scalars().all()
-        return [
-            {
-                "id": ep.id,
-                "show_id": ep.show_id,
-                "date": ep.date,
-                "title": ep.title,
-                "status": ep.status,
-                "created_at": ep.created_at.isoformat() if ep.created_at else None,
-            }
-            for ep in episodes
-        ]
+        return [_serialize_episode(ep) for ep in episodes]
 
 
 @router.get("/episodes/{episode_id}")
@@ -317,17 +299,7 @@ async def get_episode(episode_id: int, user: User = Depends(get_current_user)):
         ep = result.scalar_one_or_none()
         if ep is None:
             raise HTTPException(status_code=404, detail="Episode not found")
-        return {
-            "id": ep.id,
-            "show_id": ep.show_id,
-            "date": ep.date,
-            "title": ep.title,
-            "script_text": ep.script_text,
-            "notes_text": ep.notes_text,
-            "status": ep.status,
-            "audio_path": ep.audio_path,
-            "created_at": ep.created_at.isoformat() if ep.created_at else None,
-        }
+        return _serialize_episode(ep, include_text=True)
 
 
 @router.get("/episodes/{episode_id}/audio")
@@ -487,7 +459,7 @@ async def generate_show_episode(
     user: User = Depends(get_current_user),
 ):
     """Trigger episode generation for a specific show."""
-    from api.worker import run_pipeline_for_show
+    from api.worker import create_episode_for_show, run_pipeline_for_show
 
     async with async_session() as db:
         result = await db.execute(
@@ -497,21 +469,7 @@ async def generate_show_episode(
         if not show:
             raise HTTPException(status_code=404, detail="Show not found")
 
-        # Create episode record
-        from datetime import datetime, timezone
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        episode = Episode(
-            user_id=user.id,
-            show_id=show.id,
-            date=date_str,
-            status="pending",
-            title=f"{show.name} — {date_str}",
-        )
-        db.add(episode)
-        await db.commit()
-        await db.refresh(episode)
-        episode_id = episode.id
-
+    episode_id = await create_episode_for_show(show)
     background_tasks.add_task(run_pipeline_for_show, show_id, episode_id)
 
     return {"status": "pending", "episode_id": episode_id}

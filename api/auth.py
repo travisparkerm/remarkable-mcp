@@ -7,16 +7,15 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from authlib.integrations.starlette_client import OAuth
-from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jose import jwt
 from sqlalchemy import select
 
 from api.database import User, UserSettings, async_session
+from daily_podcast.config import load_env
 
 # Load env files before reading config
-load_dotenv(".env.local")
-load_dotenv(".env")
+load_env()
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
