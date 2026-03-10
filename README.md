@@ -491,6 +491,37 @@ Treat your reMarkable as a second brain that AI can access. Combined with tools 
 
 ---
 
+## Web App (Podcast)
+
+### Running the server
+
+```bash
+# Activate the virtual environment
+source .venv/bin/activate
+
+# Start the backend (serves API + built frontend)
+uvicorn api.main:app --reload
+
+# Or without reload:
+# uvicorn api.main:app
+```
+
+The app will be available at `http://localhost:8000`.
+
+### Frontend development
+
+```bash
+cd web
+npm run dev     # Dev server at http://localhost:5173 (proxies /api to :8000)
+npm run build   # Build for production (output in web/dist/)
+```
+
+### Restarting the server
+
+If the server is already running, press `Ctrl+C` in the terminal to stop it, then run `uvicorn api.main:app --reload` again.
+
+---
+
 ## Development
 
 ```bash

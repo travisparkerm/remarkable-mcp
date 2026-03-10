@@ -48,7 +48,9 @@ class GenerateRequest(BaseModel):
 
 class ShowCreate(BaseModel):
     name: str
-    scope: str = "/"  # JSON list of paths or single path
+    source_type: str = "remarkable"  # remarkable, photo_library
+    source_config: str | None = None  # JSON
+    scope: str = "/"  # JSON list of paths or single path (remarkable)
     time_window: str = "7d"  # 1d, 7d, 30d, all
     character: str = "analyst"
     cadence: str = "on-demand"  # daily, weekly, monthly, on-demand
@@ -59,6 +61,8 @@ class ShowCreate(BaseModel):
 
 class ShowUpdate(BaseModel):
     name: str | None = None
+    source_type: str | None = None
+    source_config: str | None = None
     scope: str | None = None
     time_window: str | None = None
     character: str | None = None
@@ -106,6 +110,8 @@ async def list_shows(user: User = Depends(get_current_user)):
                 "id": s.id,
                 "name": s.name,
                 "slug": s.slug,
+                "source_type": s.source_type,
+                "source_config": s.source_config,
                 "scope": s.scope,
                 "time_window": s.time_window,
                 "character": s.character,
@@ -140,6 +146,8 @@ async def create_show(body: ShowCreate, user: User = Depends(get_current_user)):
             user_id=user.id,
             name=body.name,
             slug=slug,
+            source_type=body.source_type,
+            source_config=body.source_config,
             scope=body.scope,
             time_window=body.time_window,
             character=body.character,
@@ -156,6 +164,8 @@ async def create_show(body: ShowCreate, user: User = Depends(get_current_user)):
             "id": show.id,
             "name": show.name,
             "slug": show.slug,
+            "source_type": show.source_type,
+            "source_config": show.source_config,
             "scope": show.scope,
             "time_window": show.time_window,
             "character": show.character,
@@ -182,6 +192,8 @@ async def get_show(show_id: int, user: User = Depends(get_current_user)):
             "id": show.id,
             "name": show.name,
             "slug": show.slug,
+            "source_type": show.source_type,
+            "source_config": show.source_config,
             "scope": show.scope,
             "time_window": show.time_window,
             "character": show.character,
@@ -211,6 +223,10 @@ async def update_show(
         if body.name is not None:
             show.name = body.name
             show.slug = _slugify(body.name)
+        if body.source_type is not None:
+            show.source_type = body.source_type
+        if body.source_config is not None:
+            show.source_config = body.source_config
         if body.scope is not None:
             show.scope = body.scope
         if body.time_window is not None:

@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import ForeignKey, String, Text, Integer, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, String, Text, Integer, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -62,6 +62,46 @@ class RemarkableDevice(Base):
     user: Mapped["User"] = relationship(back_populates="devices")
 
 
+class Album(Base):
+    __tablename__ = "albums"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    user: Mapped["User"] = relationship()
+    photos: Mapped[list["Photo"]] = relationship(back_populates="album")
+
+
+class Photo(Base):
+    __tablename__ = "photos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    album_id: Mapped[int] = mapped_column(ForeignKey("albums.id"), nullable=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    thumbnail_path: Mapped[str] = mapped_column(String(512), nullable=True)
+    ocr_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending"
+    )  # pending / processing / ready / failed
+    ocr_text: Mapped[str] = mapped_column(Text, nullable=True)
+    ocr_completed_at: Mapped[datetime] = mapped_column(nullable=True)
+    ocr_confidence: Mapped[float] = mapped_column(Float, nullable=True)
+    user_date: Mapped[str] = mapped_column(String(10), nullable=True)  # YYYY-MM-DD
+    user_notes: Mapped[str] = mapped_column(Text, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    user: Mapped["User"] = relationship()
+    album: Mapped["Album"] = relationship(back_populates="photos")
+
+
 class Show(Base):
     __tablename__ = "shows"
     __table_args__ = (UniqueConstraint("user_id", "slug"),)
@@ -70,7 +110,11 @@ class Show(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(64), nullable=False)
-    scope: Mapped[str] = mapped_column(Text, nullable=False, default="/")  # JSON list of paths
+    source_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="remarkable"
+    )  # remarkable, photo_library
+    source_config: Mapped[str] = mapped_column(Text, nullable=True)  # JSON
+    scope: Mapped[str] = mapped_column(Text, nullable=False, default="/")  # JSON list of paths (remarkable)
     time_window: Mapped[str] = mapped_column(String(10), nullable=False, default="7d")  # 1d, 7d, 30d, all
     character: Mapped[str] = mapped_column(String(32), nullable=False, default="analyst")
     cadence: Mapped[str] = mapped_column(String(20), nullable=False, default="on-demand")  # daily, weekly, monthly, on-demand
@@ -139,3 +183,24 @@ async def init_db():
             await conn.execute(
                 sa.text("ALTER TABLE episodes ADD COLUMN show_id INTEGER REFERENCES shows(id)")
             )
+
+        # Migrate: add source_type and source_config to shows if missing
+        result = await conn.execute(sa.text("PRAGMA table_info(shows)"))
+        columns = {row[1] for row in result}
+        if "source_type" not in columns:
+            await conn.execute(
+                sa.text("ALTER TABLE shows ADD COLUMN source_type VARCHAR(32) NOT NULL DEFAULT 'remarkable'")
+            )
+        if "source_config" not in columns:
+            await conn.execute(
+                sa.text("ALTER TABLE shows ADD COLUMN source_config TEXT")
+            )
+            # Migrate existing shows: build source_config from scope + time_window
+            shows = await conn.execute(sa.text("SELECT id, scope, time_window FROM shows"))
+            for row in shows:
+                import json
+                config = json.dumps({"folder_path": row[1], "time_window": row[2]})
+                await conn.execute(
+                    sa.text("UPDATE shows SET source_config = :config WHERE id = :id"),
+                    {"config": config, "id": row[0]},
+                )

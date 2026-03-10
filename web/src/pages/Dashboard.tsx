@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import {
   getEpisodes,
   getShows,
-  getRemarkableStatus,
   type Episode,
   type Show,
   type User,
@@ -54,15 +53,13 @@ function StatusBadge({ status }: { status: string }) {
 export default function Dashboard({ user, onLogout }: Props) {
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [shows, setShows] = useState<Show[]>([]);
-  const [remarkableConnected, setRemarkableConnected] = useState(true);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([getEpisodes(), getShows(), getRemarkableStatus()])
-      .then(([eps, s, status]) => {
+    Promise.all([getEpisodes(), getShows()])
+      .then(([eps, s]) => {
         setEpisodes(eps);
         setShows(s);
-        setRemarkableConnected(status.connected);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -88,6 +85,12 @@ export default function Dashboard({ user, onLogout }: Props) {
               className="text-sm text-neutral-400 transition hover:text-neutral-200"
             >
               Shows
+            </Link>
+            <Link
+              to="/photos"
+              className="text-sm text-neutral-400 transition hover:text-neutral-200"
+            >
+              Photos
             </Link>
             <Link
               to="/settings"
@@ -118,24 +121,8 @@ export default function Dashboard({ user, onLogout }: Props) {
       </header>
 
       <main className="mx-auto max-w-2xl px-4 py-8">
-        {/* reMarkable not connected banner */}
-        {!remarkableConnected && !loading && (
-          <Link
-            to="/settings"
-            className="mb-8 block rounded-xl border border-amber-900/50 bg-amber-950/30 p-5 transition hover:border-amber-800/50"
-          >
-            <h3 className="text-sm font-medium text-amber-400">
-              Connect your reMarkable
-            </h3>
-            <p className="mt-1 text-sm text-neutral-400">
-              Link your tablet in Settings to start generating episodes from
-              your notes.
-            </p>
-          </Link>
-        )}
-
-        {/* Shows summary */}
-        {!loading && shows.length === 0 && remarkableConnected && (
+        {/* Getting started banners */}
+        {!loading && shows.length === 0 && (
           <Link
             to="/shows/new"
             className="mb-8 block rounded-xl border border-amber-900/50 bg-amber-950/30 p-5 transition hover:border-amber-800/50"
@@ -144,8 +131,8 @@ export default function Dashboard({ user, onLogout }: Props) {
               Create your first show
             </h3>
             <p className="mt-1 text-sm text-neutral-400">
-              Set up a show to start generating podcast episodes from your
-              reMarkable notes.
+              Set up a show to generate podcast episodes from your reMarkable
+              tablet or uploaded journal photos.
             </p>
           </Link>
         )}

@@ -17,6 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from api.auth import APP_SECRET_KEY, router as auth_router
 from api.database import init_db
+from api.photos import router as photos_router
 from api.routes import router as api_router
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ app.add_middleware(
 # Routers
 app.include_router(auth_router)
 app.include_router(api_router)
+app.include_router(photos_router)
 
 # Serve SPA static files (web/dist/) at root — must be last
 web_dist = Path(__file__).resolve().parent.parent / "web" / "dist"

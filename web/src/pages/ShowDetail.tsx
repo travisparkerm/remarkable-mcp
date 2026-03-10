@@ -24,6 +24,11 @@ const TIME_WINDOW_LABELS: Record<string, string> = {
   all: "All time",
 };
 
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  remarkable: "reMarkable",
+  photo_library: "Photo Library",
+};
+
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     ready: "bg-emerald-900/50 text-emerald-400",
@@ -115,6 +120,9 @@ export default function ShowDetail() {
               {show.name}
             </h1>
             <div className="mt-2 flex flex-wrap gap-2">
+              <span className="inline-block rounded-full bg-neutral-800 px-2.5 py-0.5 text-xs text-neutral-400">
+                {SOURCE_TYPE_LABELS[show.source_type] ?? show.source_type ?? "reMarkable"}
+              </span>
               <span className="inline-block rounded-full bg-neutral-800 px-2.5 py-0.5 text-xs text-neutral-400">
                 {CHARACTER_LABELS[show.character] ?? show.character}
               </span>

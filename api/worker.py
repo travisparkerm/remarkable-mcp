@@ -2,6 +2,7 @@
 Background worker that runs the podcast pipeline for shows.
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from api.database import Episode, RemarkableDevice, Show, UserSettings, async_session
+from api.database import Episode, Photo, RemarkableDevice, Show, UserSettings, async_session
 from daily_podcast.extract import TIME_WINDOW_DAYS
 
 logger = logging.getLogger(__name__)
@@ -34,15 +35,21 @@ async def run_pipeline_for_show(show_id: int, episode_id: int):
             logger.error("Show %d not found", show_id)
             return
 
-        result = await db.execute(
-            select(RemarkableDevice)
-            .where(RemarkableDevice.user_id == show.user_id)
-            .order_by(RemarkableDevice.registered_at.desc())
-        )
-        device = result.scalar_one_or_none()
-        if device is None:
-            await _fail_episode(db, episode_id, "No reMarkable device registered")
-            return
+        source_type = show.source_type or "remarkable"
+
+        # For reMarkable shows, we need a device token
+        device_token = None
+        if source_type == "remarkable":
+            result = await db.execute(
+                select(RemarkableDevice)
+                .where(RemarkableDevice.user_id == show.user_id)
+                .order_by(RemarkableDevice.registered_at.desc())
+            )
+            device = result.scalar_one_or_none()
+            if device is None:
+                await _fail_episode(db, episode_id, "No reMarkable device registered")
+                return
+            device_token = device.device_token
 
         result = await db.execute(
             select(UserSettings).where(UserSettings.user_id == show.user_id)
@@ -55,7 +62,6 @@ async def run_pipeline_for_show(show_id: int, episode_id: int):
             episode.status = "processing"
             await db.commit()
 
-        device_token = device.device_token
         tz = settings.timezone if settings else "Europe/Warsaw"
         user_id = show.user_id
 
@@ -63,6 +69,8 @@ async def run_pipeline_for_show(show_id: int, episode_id: int):
         show_config = {
             "name": show.name,
             "slug": show.slug,
+            "source_type": source_type,
+            "source_config": show.source_config,
             "scope": show.scope,
             "time_window": show.time_window,
             "character": show.character,
@@ -74,6 +82,11 @@ async def run_pipeline_for_show(show_id: int, episode_id: int):
         if not show_config["voice_id"] and settings:
             show_config["voice_id"] = settings.elevenlabs_voice_id
 
+        # For photo_library, extract text from cached OCR now (async)
+        extracted_text = None
+        if source_type == "photo_library":
+            extracted_text = await _extract_photo_library_text(show)
+
     try:
         result = await asyncio.to_thread(
             _run_show_pipeline_sync,
@@ -82,6 +95,7 @@ async def run_pipeline_for_show(show_id: int, episode_id: int):
             tz,
             show_config,
             episode_id,
+            extracted_text,
         )
     except Exception as e:
         logger.exception("Pipeline failed for show %d, episode %d", show_id, episode_id)
@@ -125,12 +139,70 @@ def _update_episode_sync(episode_id: int, **fields):
         loop.close()
 
 
+async def _extract_photo_library_text(show: Show) -> str:
+    """Extract text from photo library source by reading cached OCR."""
+    source_config = json.loads(show.source_config) if show.source_config else {}
+    album_id = source_config.get("album_id")
+    photo_ids = source_config.get("photo_ids")
+    time_window = show.time_window
+
+    async with async_session() as db:
+        if album_id:
+            query = select(Photo).where(
+                Photo.album_id == album_id,
+                Photo.user_id == show.user_id,
+                Photo.ocr_status == "ready",
+            )
+        elif photo_ids:
+            query = select(Photo).where(
+                Photo.id.in_(photo_ids),
+                Photo.user_id == show.user_id,
+                Photo.ocr_status == "ready",
+            )
+        else:
+            return ""
+
+        # Apply time window for album-based sources (not for specific photo IDs)
+        if album_id and time_window and time_window != "all":
+            days = TIME_WINDOW_DAYS.get(time_window)
+            if days:
+                from datetime import timedelta
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                cutoff_str = cutoff.strftime("%Y-%m-%d")
+                # Filter by user_date if set, otherwise by uploaded_at
+                query = query.where(
+                    (Photo.user_date >= cutoff_str) | (Photo.uploaded_at >= cutoff)
+                )
+
+        # Order by user_date (if set), then uploaded_at
+        query = query.order_by(Photo.user_date.asc().nullslast(), Photo.uploaded_at.asc())
+
+        result = await db.execute(query)
+        photos = result.scalars().all()
+
+    if not photos:
+        return ""
+
+    # Concatenate OCR text with photo metadata as headers
+    sections = []
+    for p in photos:
+        if not p.ocr_text:
+            continue
+        header = f"## {p.filename}"
+        if p.user_date:
+            header += f" ({p.user_date})"
+        sections.append(f"{header}\n\n{p.ocr_text}")
+
+    return "\n\n---\n\n".join(sections)
+
+
 def _run_show_pipeline_sync(
     user_id: int,
-    device_token: str,
+    device_token: str | None,
     timezone_str: str,
     show_config: dict,
     episode_id: int = 0,
+    extracted_text: str | None = None,
 ) -> dict:
     """
     Synchronous pipeline execution for a show. Runs in a thread.
@@ -144,11 +216,15 @@ def _run_show_pipeline_sync(
 
     config = load_config()
 
-    # Override with user's device token
-    rmapi_file = Path.home() / ".rmapi"
-    rmapi_file.write_text(device_token)
-    os.environ["REMARKABLE_TOKEN"] = device_token
-    config.remarkable_token = device_token
+    source_type = show_config.get("source_type", "remarkable")
+
+    # Only set up reMarkable token for remarkable source type
+    if source_type == "remarkable" and device_token:
+        rmapi_file = Path.home() / ".rmapi"
+        rmapi_file.write_text(device_token)
+        os.environ["REMARKABLE_TOKEN"] = device_token
+        config.remarkable_token = device_token
+
     config.timezone = timezone_str
 
     show_slug = show_config["slug"]
@@ -172,17 +248,22 @@ def _run_show_pipeline_sync(
     now = datetime.now(tz)
     date_str = now.strftime("%Y-%m-%d")
 
-    # Determine days from time_window
-    time_window = show_config.get("time_window", "7d")
-    days = TIME_WINDOW_DAYS.get(time_window, 7)
-
-    scope = show_config.get("scope", "/")
-
     # Step 1: Extract notes
     _update_episode_sync(episode_id, status="extracting")
-    logger.info("Show '%s': extracting notes (window=%s, scope=%s)",
-                show_config["name"], time_window, scope)
-    notes_text = extract_notes(config, now, days=days, scope=scope)
+
+    if source_type == "photo_library":
+        # Text was pre-extracted from cached OCR (passed in from async context)
+        notes_text = extracted_text or ""
+        logger.info("Show '%s': using photo library text (%d chars)",
+                    show_config["name"], len(notes_text))
+    else:
+        # reMarkable extraction
+        time_window = show_config.get("time_window", "7d")
+        days = TIME_WINDOW_DAYS.get(time_window, 7)
+        scope = show_config.get("scope", "/")
+        logger.info("Show '%s': extracting notes (window=%s, scope=%s)",
+                    show_config["name"], time_window, scope)
+        notes_text = extract_notes(config, now, days=days, scope=scope)
     if not notes_text:
         return {
             "status": "failed",

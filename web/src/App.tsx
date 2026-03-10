@@ -4,6 +4,7 @@ import { getMe, setToken, clearToken, getRemarkableStatus, getRemarkableLibrary,
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Player from "./pages/Player";
+import PhotoLibrary from "./pages/PhotoLibrary";
 import Settings from "./pages/Settings";
 import Shows from "./pages/Shows";
 import ShowDetail from "./pages/ShowDetail";
@@ -71,6 +72,14 @@ export default function App() {
         element={
           <ProtectedRoute user={user}>
             <Dashboard user={user!} onLogout={handleLogout} />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/photos"
+        element={
+          <ProtectedRoute user={user}>
+            <PhotoLibrary />
           </ProtectedRoute>
         }
       />

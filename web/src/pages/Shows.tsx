@@ -30,6 +30,11 @@ const CADENCE_LABELS: Record<string, string> = {
   "on-demand": "On-demand",
 };
 
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  remarkable: "reMarkable",
+  photo_library: "Photo Library",
+};
+
 interface Props {
   user: User;
 }
@@ -89,7 +94,7 @@ export default function Shows({ user: _user }: Props) {
           <div className="mt-8 rounded-xl border border-neutral-900 bg-neutral-900/30 p-12 text-center">
             <p className="text-sm text-neutral-400">
               No shows yet. Create your first show to start generating episodes
-              from your reMarkable notes.
+              from your reMarkable notes or journal photos.
             </p>
           </div>
         )}
@@ -107,6 +112,9 @@ export default function Shows({ user: _user }: Props) {
                       {show.name}
                     </h3>
                     <div className="mt-2 flex flex-wrap gap-2">
+                      <span className="inline-block rounded-full bg-neutral-800 px-2.5 py-0.5 text-xs text-neutral-400">
+                        {SOURCE_TYPE_LABELS[show.source_type] ?? show.source_type ?? "reMarkable"}
+                      </span>
                       <span className="inline-block rounded-full bg-neutral-800 px-2.5 py-0.5 text-xs text-neutral-400">
                         {CHARACTER_LABELS[show.character] ?? show.character}
                       </span>
